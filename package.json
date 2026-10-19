@@ -1,0 +1,22 @@
+{
+  "name": "weigh",
+  "version": "0.1.0",
+  "description": "Before/after eval harness for LLM pipelines: binary checks, metered tokens, judge validation, review page, CI gate.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "weigh": "src/cli.ts"
+  },
+  "scripts": {
+    "weigh": "bun src/cli.ts",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "bun-types": "^1.4.2",
+    "typescript": "^7.0.2"
+  }
+}
