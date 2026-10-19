@@ -15,6 +15,12 @@ export function renderMarkdown(r: ReportInput): string {
     `${meta.description}`,
     "",
     `**Gate ${gate.pass ? "passed" : "failed"}.** ${gate.pass ? "Pass-all did not drop and the guarded checks did not fall." : gate.reasons.join("; ")}`,
+    ...(r.noise
+      ? [
+          "",
+          `**Noise floor: the candidate's change is ${r.noise.within ? "within" : "beyond"} it.** The baseline run twice (${B.variant} against ${r.noise.variant}) moved pass-all ${signedPct(-r.noise.passAllDrop)} against the candidate's ${signedPct(-r.noise.candidatePassAllDrop)}${r.noise.checks.length ? "; " + r.noise.checks.map((c) => `${c.id} ${signedPct(-c.noiseDrop)} against ${signedPct(-c.candidateDrop)}`).join(", ") : ""}.`,
+        ]
+      : []),
     "",
     "| | " + B.variant + " | " + C.variant + " | change |",
     "|---|---|---|---|",

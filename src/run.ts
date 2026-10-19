@@ -141,7 +141,8 @@ export async function runSuite(suite: Suite, opts: RunOptions = {}) {
     started_at: new Date().toISOString(),
     cases: cases.length,
     skipped: suite.skipped?.() ?? [],
-    variants: variants.map((v) => ({
+    // Every suite variant is listed, even when --variants ran a subset: later runs with the same id fill the rest.
+    variants: suite.variants.map((v) => ({
       name: v.name,
       description: v.description,
     })),
@@ -153,6 +154,7 @@ export async function runSuite(suite: Suite, opts: RunOptions = {}) {
     baseline: suite.baseline,
     candidate: suite.candidate,
     gate: suite.gate,
+    noise: suite.noise,
     command: opts.command ?? `bun src/cli.ts run suites/${suite.name}.ts`,
   };
   writeFileSync(
@@ -192,6 +194,48 @@ export async function runSuite(suite: Suite, opts: RunOptions = {}) {
     JSON.stringify({ ...meta, case_order: cases.map((c) => c.id) }, null, 1),
   );
   return dir;
+}
+
+/**
+ * Re-run the suite's checks over a run's cached outputs and rewrite the trace lines. No model call is
+ * repeated, so a check can be fixed or added after the fact and the whole run re-scored for free.
+ * run.json is refreshed from the suite (checks, variants, gate, baseline, candidate) and stamped.
+ */
+export async function rescore(suite: Suite, dir: string) {
+  const cases = new Map((await suite.cases()).map((c) => [c.id, c]));
+  const lines = readTraces(dir);
+  let changed = 0;
+  let scored = 0;
+  for (const l of lines) {
+    const c = cases.get(l.case_id);
+    const o = l.ok ? readOutput(dir, l) : undefined;
+    if (!c || !o) continue;
+    const checks = await runChecks(suite, c, o);
+    if (JSON.stringify(checks) !== JSON.stringify(l.checks)) changed++;
+    l.checks = checks;
+    scored++;
+  }
+  writeFileSync(
+    join(dir, "traces.jsonl"),
+    lines.map((l) => JSON.stringify(l) + "\n").join(""),
+  );
+  const meta = readMeta(dir);
+  meta.checks = suite.checks.map((c) => ({
+    id: c.id,
+    description: c.description,
+    kind: c.kind,
+  }));
+  meta.variants = suite.variants.map((v) => ({
+    name: v.name,
+    description: v.description,
+  }));
+  meta.baseline = suite.baseline;
+  meta.candidate = suite.candidate;
+  meta.gate = suite.gate;
+  meta.noise = suite.noise;
+  meta.rescored_at = new Date().toISOString();
+  writeFileSync(join(dir, "run.json"), JSON.stringify(meta, null, 1));
+  return { lines: lines.length, scored, changed };
 }
 
 export function readTraces(dir: string): TraceLine[] {

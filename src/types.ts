@@ -104,6 +104,8 @@ export interface Suite {
   baseline: string;
   candidate: string;
   gate?: Gate;
+  /** A variant that is the baseline run again. Its distance from the baseline is the noise floor the report shows next to the candidate's change. */
+  noise?: string;
   /** Parallel variant runs. Default 2. */
   concurrency?: number;
   /** Short text of a case for the review page. Default: the input as JSON, trimmed to 4,000 characters. */
@@ -135,6 +137,8 @@ export interface RunMeta {
   description: string;
   started_at: string;
   finished_at?: string;
+  /** Set when checks were re-run over cached outputs after the run. */
+  rescored_at?: string;
   cases: number;
   skipped: { id: string; reason: string }[];
   variants: { name: string; description: string }[];
@@ -142,5 +146,6 @@ export interface RunMeta {
   baseline: string;
   candidate: string;
   gate?: Gate;
+  noise?: string;
   command: string;
 }

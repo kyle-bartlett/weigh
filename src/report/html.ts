@@ -1,4 +1,4 @@
-import type { Comparison, GateResult } from "../stats.ts";
+import type { Comparison, GateResult, NoiseFloor } from "../stats.ts";
 import { pct, signedPct } from "../stats.ts";
 import type { RunMeta, TraceLine } from "../types.ts";
 import { promptTokens } from "../types.ts";
@@ -37,6 +37,7 @@ section{padding-block:clamp(36px,5vw,64px);border-top:1px solid var(--line)}
 .verdict .dot{width:11px;height:11px;border-radius:50%;background:var(--live);box-shadow:0 0 0 4px var(--live-soft);flex:none}
 .verdict.fail .dot{background:var(--gate);box-shadow:0 0 0 4px var(--gate-soft)}
 .verdict b{font-weight:600}.verdict span{color:var(--ink2)}
+.verdict.noise{margin-top:-24px;border-color:var(--line2);box-shadow:none}.verdict.noise .dot{background:var(--ink3,var(--ink2));box-shadow:none;width:9px;height:9px}
 .proof{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .proof div{padding:22px 18px 20px;border-right:1px solid var(--line2)}.proof div:first-child{padding-left:0}.proof div:last-child{border-right:0}
 .proof .n{font-family:"Bricolage Grotesque",sans-serif;font-variation-settings:"opsz" 96;font-weight:700;font-size:clamp(26px,2.8vw,38px);line-height:1;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
@@ -88,12 +89,25 @@ export interface ReportInput {
   meta: RunMeta & { case_order: string[] };
   lines: TraceLine[];
   cmp: Comparison;
+  noise?: NoiseFloor;
   gate: GateResult;
   judge?: ReturnType<typeof validate> & { check: string };
   generatedAt?: string;
 }
 
 /** One dot per case: baseline prompt tokens on the left, candidate on the right, a line between. */
+function noiseBand(r: ReportInput): string {
+  const n = r.noise;
+  if (!n) return "";
+  const checks = n.checks
+    .map(
+      (c) =>
+        `${esc(c.id)} ${signedPct(-c.noiseDrop)} against the candidate's ${signedPct(-c.candidateDrop)}`,
+    )
+    .join(", ");
+  return `<div class="verdict noise"><span class="dot"></span><div><b>Noise floor: the candidate's change is ${n.within ? "within" : "beyond"} it.</b> <span>The baseline run twice (${esc(r.cmp.baseline.variant)} against ${esc(n.variant)}) moved pass-all ${signedPct(-n.passAllDrop)} against the candidate's ${signedPct(-n.candidatePassAllDrop)}${checks ? "; " + checks : ""}. A drop no larger than the baseline's own drift is not evidence of a regression.</span></div></div>`;
+}
+
 function stripPlot(cmp: Comparison): string {
   const b = cmp.baseline.usage.promptTokens,
     c = cmp.candidate.usage.promptTokens;
@@ -225,7 +239,7 @@ export function renderHtml(r: ReportInput): string {
 <h1 class="display">${title}</h1>
 <p class="lede">${esc(meta.description)} <b>${order.length} cases</b>, two variants, ${checkIds.length} binary checks. ${metered ? "Tokens and cost are metered from the provider's usage report." : "Some usage figures are estimates; the method notes say which."}</p>
 <div class="verdict ${gate.pass ? "" : "fail"}"><span class="dot"></span><div><b>Gate ${gate.pass ? "passed" : "failed"}.</b> <span>${gate.pass ? `Pass-all did not drop${meta.gate?.noRegressionOn?.length ? ` and ${esc(meta.gate.noRegressionOn.join(", "))} did not fall` : ""}.` : esc(gate.reasons.join("; "))}</span></div></div>
-<div class="proof">
+${noiseBand(r)}<div class="proof">
 <div><div class="n">${pct(B.passAll.rate, 0)}<small>${esc(B.variant)}</small></div><div class="t">pass-all rate, baseline (${B.passAll.passed} of ${B.passAll.n})</div></div>
 <div><div class="n">${pct(C.passAll.rate, 0)}<small>${esc(C.variant)}</small></div><div class="t">pass-all rate, candidate (${C.passAll.passed} of ${C.passAll.n})</div></div>
 <div><div class="n ${tokDelta < 0 ? "up" : "down"}">${esc(signedPct(tokDelta))}</div><div class="t">prompt tokens per case, ${n0(cmp.promptTokens.baselineMean)} to ${n0(cmp.promptTokens.candidateMean)} (${esc(ci(cmp.promptTokens.ci, (x) => signedPct(x / Math.max(1, cmp.promptTokens.baselineMean))))} on the mean)</div></div>

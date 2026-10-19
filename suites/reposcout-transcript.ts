@@ -358,42 +358,96 @@ const items = (o: VariantOutput): Items =>
   (o.output as { items?: Items })?.items ?? [];
 const norm = (s: string) => core.slug(s).replace(/-/g, "");
 
-/** A production item key is found when a raw item points at the same repo or tool, without any network lookup. */
+const STOP = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "on",
+  "in",
+  "of",
+  "an",
+  "by",
+  "to",
+  "vs",
+  "claim",
+  "fork",
+  "archived",
+  "open",
+  "source",
+]);
+/** Meaningful words of a name: slug tokens longer than one character that are not filler. */
+export const words = (s: string) =>
+  core
+    .slug(s)
+    .split("-")
+    .filter((w) => w.length > 1 && !STOP.has(w));
+/** Two names describe one thing when they share two meaningful words, or one's words all appear in the other. */
+export function similarNames(a: string, b: string): boolean {
+  const wa = new Set(words(a));
+  const wb = new Set(words(b));
+  if (!wa.size || !wb.size) return false;
+  const shared = [...wa].filter((w) => wb.has(w)).length;
+  return shared >= 2 || shared === Math.min(wa.size, wb.size);
+}
+const GH = /github\.com\/([^/\s#?]+)\/([^/\s#?]+)/i;
+
+/**
+ * A production item key is found when a raw item points at the same repo or tool, without any network lookup.
+ * Reference keys come from production's resolve stage, which follows GitHub redirects, so a repo the model
+ * lists under its old org (sst/opencode for anomalyco/opencode) is the same repo. A GitHub URL for some other
+ * repo is never a match, whatever the item is called. Without a repo URL the name decides, and a one-word
+ * repo name inside a longer product name (incus in "Incus Commander") is not enough. Open coding of the first
+ * run's regressions found three of eight were this matcher rejecting an item that was plainly listed.
+ */
 export function found(ref: string, its: Items): boolean {
   if (ref.startsWith("gh:")) {
     const [owner, repo] = ref.slice(3).split("/");
     if (!owner || !repo) return false;
-    return its.some(
-      (i) =>
-        (i.url ?? "").toLowerCase().includes(`${owner}/${repo}`) ||
+    return its.some((i) => {
+      const m = (i.url ?? "").match(GH);
+      if (m) {
+        const uo = m[1]!.toLowerCase();
+        const ur = m[2]!.replace(/\.git$/, "");
+        if (norm(ur) === norm(repo)) return true;
+        return uo === owner && similarNames(`${ur} ${i.name}`, repo);
+      }
+      return (
         core.itemKey(i.kind, i.url ?? i.name) === ref ||
         norm(i.name) === norm(repo) ||
         norm(i.name) === norm(`${owner}/${repo}`) ||
-        norm(i.name) === norm(`${owner} ${repo}`),
-    );
+        norm(i.name) === norm(`${owner} ${repo}`) ||
+        (words(repo).length >= 2 && similarNames(i.name, repo))
+      );
+    });
   }
   if (ref.startsWith("web:")) {
-    const host = ref.slice(4).split("/")[0]!;
-    const brand = host.split(".").slice(-2)[0]!;
+    const [host, ...path] = ref.slice(4).split("/");
+    const brand = host!.split(".").slice(-2)[0]!;
+    const leaf = path.at(-1) ?? "";
     return its.some(
       (i) =>
-        (i.url ?? "").toLowerCase().includes(host) ||
+        (i.url ?? "").toLowerCase().includes(host!) ||
         norm(i.name) === norm(brand) ||
-        norm(i.name).includes(norm(brand)),
+        norm(i.name).includes(norm(brand)) ||
+        (leaf.length >= 4 &&
+          (norm(i.name) === norm(leaf) || similarNames(i.name, leaf))),
     );
   }
   const name = ref.replace(/^(name|tool):/, "");
   return its.some(
     (i) =>
       norm(i.name) === norm(name) ||
-      core.itemKey(i.kind, i.url ?? i.name) === ref,
+      core.itemKey(i.kind, i.url ?? i.name) === ref ||
+      similarNames(i.name, name),
   );
 }
 
 const suite: Suite = {
   name: "reposcout-transcript",
   description:
-    "Repo Scout reads YouTube repo channels and lists every repo and tool a video covers. Baseline sends the full captions to the model; the candidates send only the caption chunks Jev says name a tool (jev-filter: at or above 0.5 with one neighbor each side; jev-strict: at or above 0.75, no neighbors).",
+    "Repo Scout reads YouTube repo channels and lists every repo and tool a video covers. Baseline sends the full captions to the model; the candidates send only the caption chunks Jev says name a tool (jev-filter: at or above 0.5 with one neighbor each side; jev-strict: at or above 0.75, no neighbors). full-repeat is the baseline run twice, the noise floor.",
   cases,
   skipped: () => [...skipped],
   concurrency: 3,
@@ -420,6 +474,18 @@ const suite: Suite = {
       filter.DEFAULT_FILTER.neighbors,
     ),
     jevVariant("jev-strict", 0.75, 0),
+    {
+      name: "full-repeat",
+      description:
+        "The baseline run a second time on the same inputs. Its distance from full is the noise floor: any candidate change smaller than this is not evidence.",
+      run: (c) => {
+        const t = (c.input as Input).transcript;
+        return runVariant(c, t, {
+          charsBefore: t.length,
+          charsAfter: Math.min(t.length, 45000),
+        });
+      },
+    },
   ],
   checks: [
     check(
@@ -462,8 +528,9 @@ const suite: Suite = {
     noEmDash(),
   ],
   baseline: "full",
-  candidate: "jev-strict",
+  candidate: "jev-filter",
   gate: { maxPassAllDrop: 0, noRegressionOn: ["item_recall", "linked_recall"] },
+  noise: "full-repeat",
 };
 
 export default suite;

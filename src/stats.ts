@@ -257,6 +257,41 @@ export interface GateResult {
 }
 
 /** The gate rule, spelled out so the report can quote it. */
+/**
+ * The noise floor: how far the baseline moved against itself. A candidate drop no larger than this on
+ * pass-all and on every guarded check is not evidence of a regression, whatever the gate says.
+ */
+export interface NoiseFloor {
+  variant: string;
+  passAllDrop: number;
+  candidatePassAllDrop: number;
+  checks: { id: string; noiseDrop: number; candidateDrop: number }[];
+  within: boolean;
+}
+export function noiseFloor(
+  cmp: Comparison,
+  noise: Comparison,
+  guarded: string[],
+): NoiseFloor {
+  const drop = (c: Comparison) =>
+    c.baseline.passAll.rate - c.candidate.passAll.rate;
+  const checks = guarded.flatMap((id) => {
+    const a = cmp.checks.find((c) => c.id === id);
+    const b = noise.checks.find((c) => c.id === id);
+    return a && b ? [{ id, noiseDrop: -b.delta, candidateDrop: -a.delta }] : [];
+  });
+  const within =
+    drop(cmp) <= drop(noise) + 1e-9 &&
+    checks.every((c) => c.candidateDrop <= c.noiseDrop + 1e-9);
+  return {
+    variant: noise.candidate.variant,
+    passAllDrop: drop(noise),
+    candidatePassAllDrop: drop(cmp),
+    checks,
+    within,
+  };
+}
+
 export function gate(
   cmp: Comparison,
   g: { maxPassAllDrop?: number; noRegressionOn?: string[] } = {},

@@ -1,0 +1,114 @@
+{
+ "run_id": "2026-10-19-jev-filter",
+ "suite": "reposcout-transcript",
+ "description": "Repo Scout reads YouTube repo channels and lists every repo and tool a video covers. Baseline sends the full captions to the model; the candidates send only the caption chunks Jev says name a tool (jev-filter: at or above 0.5 with one neighbor each side; jev-strict: at or above 0.75, no neighbors). full-repeat is the baseline run twice, the noise floor.",
+ "started_at": "2026-10-19T19:21:29.334Z",
+ "cases": 46,
+ "skipped": [],
+ "variants": [
+  {
+   "name": "full",
+   "description": "Production today: description plus the whole transcript (capped at 45,000 characters), one standard-level call with the production prompt."
+  },
+  {
+   "name": "jev-filter",
+   "description": "Same prompt and model; the transcript first goes through Jev in 700-character chunks, keeping chunks scored at or above 0.5 plus 1 neighbor on each side and always the first two."
+  },
+  {
+   "name": "jev-strict",
+   "description": "Same prompt and model; the transcript first goes through Jev in 700-character chunks, keeping chunks scored at or above 0.75 and always the first two."
+  },
+  {
+   "name": "full-repeat",
+   "description": "The baseline run a second time on the same inputs. Its distance from full is the noise floor: any candidate change smaller than this is not evidence."
+  }
+ ],
+ "checks": [
+  {
+   "id": "json_valid",
+   "description": "The reply parsed as the Extraction schema within two attempts",
+   "kind": "code"
+  },
+  {
+   "id": "linked_recall",
+   "description": "Every repo linked in the description is named by the model before the merge backfills it",
+   "kind": "code"
+  },
+  {
+   "id": "item_recall",
+   "description": "Every repo or tool production recorded for this video appears in this variant's items (matched by URL, key or name, no network)",
+   "kind": "code"
+  },
+  {
+   "id": "categories_valid",
+   "description": "Every item category is in the allowed set",
+   "kind": "code"
+  },
+  {
+   "id": "no_em_dash",
+   "description": "No em dash in any output text",
+   "kind": "code"
+  }
+ ],
+ "baseline": "full",
+ "candidate": "jev-filter",
+ "gate": {
+  "maxPassAllDrop": 0,
+  "noRegressionOn": [
+   "item_recall",
+   "linked_recall"
+  ]
+ },
+ "command": "bun src/cli.ts run suites/reposcout-transcript.ts --run-id 2026-10-19-jev-filter --variants full-repeat",
+ "finished_at": "2026-10-19T19:30:37.112Z",
+ "case_order": [
+  "ucs0s1_3BIs",
+  "nsfgjMsSVeI",
+  "01rX9sJ5Szw",
+  "kuO4NOqp7Tc",
+  "gMfVXL3MBD4",
+  "U4k67VOKaEU",
+  "PYgTElh4CSk",
+  "me0dgw68O8g",
+  "C1X6cYmjQ_o",
+  "9oX16NOHbMk",
+  "0SDz3rjZBC4",
+  "Uz2tFYjhnE4",
+  "GqUiMns5GPg",
+  "i6kiGvqu8Yg",
+  "IAnnHdmefo8",
+  "6K43UrPnsB0",
+  "tL0KwFaAe0Y",
+  "Ci8mKyz2VXQ",
+  "oZ9pO17PonU",
+  "NlJLBlxRdFM",
+  "lHOhd5wWYLM",
+  "Y_6go0nm4v8",
+  "tN6SXwfXSm8",
+  "OISbyYot3Zo",
+  "j2-Tb_tqvYA",
+  "AiZ4HWBlLow",
+  "-XNZn6kgeYc",
+  "LpapYiidCQ0",
+  "atNtmG1BwKo",
+  "QHHNHhGj_YQ",
+  "xA8M6gvAwmA",
+  "99bOj4SUf9k",
+  "Hlc_5PiDg_M",
+  "_13qley2Kqs",
+  "mYI4SMEbZIg",
+  "ZotwULorjwI",
+  "r7kYsZcOjF4",
+  "s9l1s8jmQ6k",
+  "F_c-2Iu5niE",
+  "HPiJP3YKJNw",
+  "u9QyWBIcZ5E",
+  "tX9ANddpAqc",
+  "_WXIpV5YJAU",
+  "mwQqK4-Kfvg",
+  "GB6S5cUqZrk",
+  "AGqpFZswtiE"
+ ],
+ "rescored_at": "2026-10-19T19:38:05.073Z",
+ "noise": "full-repeat"
+}
