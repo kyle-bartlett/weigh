@@ -172,10 +172,10 @@ export async function startAgent(
     try {
       job = await hub.claim(c.agent_id, c.poll_wait_s);
     } catch (e) {
-      log(
-        "warn",
-        `claim: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`,
-      );
+      const msg = String(e instanceof Error ? e.message : e);
+      log("warn", `claim: ${msg.slice(0, 200)}`);
+      // A redeployed hub forgot this agent: register again on the next loop instead of waiting it out.
+      if (msg.includes("register first")) idle = REREGISTER_EVERY;
       await Bun.sleep(5000);
       continue;
     }
