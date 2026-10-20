@@ -44,6 +44,24 @@ export function renderMarkdown(r: ReportInput): string {
       : "No per-case regression.",
     "",
     `Paired cases: ${cmp.promptTokens.n}. Bootstrap 95% interval on the mean token difference: ${n0(cmp.promptTokens.ci.lo)} to ${n0(cmp.promptTokens.ci.hi)}. ${B.usage.metered && C.usage.metered ? "Tokens and cost metered from the provider's usage report." : "Some figures estimated; see the HTML report."}`,
+    ...(r.judges?.length
+      ? [
+          "",
+          "## Judge validation",
+          "",
+          ...r.judges.flatMap((j) => [
+            `**${j.check}** (${j.joined} labels matched, ${j.unmatched} unmatched)`,
+            "",
+            "| split | n | human fails | human passes | TPR | TNR |",
+            "|---|---|---|---|---|---|",
+            ...j.splits.map(
+              (s) =>
+                `| ${s.split} | ${s.n} | ${s.humanFails} | ${s.humanPasses} | ${pct(s.tpr)} | ${pct(s.tnr)} |`,
+            ),
+            "",
+          ]),
+        ]
+      : []),
     "",
     "Reproduce:",
     "```",

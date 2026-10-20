@@ -83,7 +83,10 @@ export interface Check {
   description: string;
   /** code: a deterministic assertion. judge: a classifier whose verdicts must be validated against human labels. */
   kind: "code" | "judge";
-  test: (c: Case, o: VariantOutput) => boolean | Promise<boolean>;
+  /** true passes, false fails. null means the check could not be evaluated for this case (a judge did not
+   *  answer); the case is left out of the check's rate and named in the trace line's `unanswered`, so a
+   *  silent judge is never scored as a failure. */
+  test: (c: Case, o: VariantOutput) => boolean | null | Promise<boolean | null>;
   /** When given and false for a case, the check is not run there and the case is left out of its rate. */
   applies?: (c: Case) => boolean;
 }
@@ -125,6 +128,8 @@ export interface TraceLine {
   error?: string;
   usage: Usage;
   checks: Record<string, boolean>;
+  /** Checks that could not be evaluated for this case (a judge gave no verdict). Not counted either way. */
+  unanswered?: string[];
   extra?: VariantOutput["extra"];
   stages?: Stage[];
   output_hash: string;

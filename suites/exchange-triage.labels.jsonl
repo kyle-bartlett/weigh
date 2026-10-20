@@ -1,0 +1,54 @@
+{"case_id":"GOLD-01","variant":"v3","human":"pass","split":"train"}
+{"case_id":"GOLD-02","variant":"v3","human":"pass","split":"dev"}
+{"case_id":"GOLD-03","variant":"v3","human":"pass","split":"dev"}
+{"case_id":"GOLD-04","variant":"v3","human":"pass","split":"test","note":"Duplex/fourplex schedule is the canonical class for two stated fourplexes"}
+{"case_id":"GOLD-05","variant":"v3","human":"pass","split":"test"}
+{"case_id":"GOLD-06","variant":"v3","human":"pass","split":"train"}
+{"case_id":"GOLD-07","variant":"v3","human":"pass","split":"dev"}
+{"case_id":"GOLD-08","variant":"v3","human":"pass","split":"dev","note":"loss runs requested reads as not yet received; a paraphrase, not an invention"}
+{"case_id":"GOLD-09","variant":"v3","human":"fail","split":"test","note":"targetPremium 31000 is the expiring premium; taken from a different field"}
+{"case_id":"GOLD-10","variant":"v3","human":"fail","split":"test","note":"propertyAddress numbers 118/122 appear only in the attachment but source says both"}
+{"case_id":"V-01","variant":"v3","human":"pass","split":"train"}
+{"case_id":"V-02","variant":"v3","human":"pass","split":"dev"}
+{"case_id":"V-03","variant":"v3","human":"pass","split":"dev"}
+{"case_id":"V-04","variant":"v3","human":"pass","split":"test"}
+{"case_id":"V-05","variant":"v3","human":"pass","split":"test","note":"Duplex/fourplex schedule is the canonical class for stated duplex rentals"}
+{"case_id":"V-06","variant":"v3","human":"pass","split":"train","note":"Frame is the ISO class for brick over frame"}
+{"case_id":"V-07","variant":"v3","human":"pass","split":"dev","note":"Mid-rise apartments restates the stated mid-rise"}
+{"case_id":"V-08","variant":"v3","human":"pass","split":"dev"}
+{"case_id":"V-09","variant":"v3","human":"fail","split":"test","note":"state TN is not in the email (Memphis, Shelby County); outside knowledge"}
+{"case_id":"V-10","variant":"v3","human":"pass","split":"test"}
+{"case_id":"V-11","variant":"v3","human":"pass","split":"train","note":"units 37 and tiv 3,650,000 are sums of stated figures; labeled as stated (the judge prompt does not yet say arithmetic counts)"}
+{"case_id":"V-12","variant":"v3","human":"pass","split":"dev","note":"tiv and targetPremium are products of stated per-door figures; labeled as stated"}
+{"case_id":"V-13","variant":"v3","human":"pass","split":"dev"}
+{"case_id":"V-14","variant":"v3","human":"pass","split":"test"}
+{"case_id":"V-15","variant":"v3","human":"pass","split":"test"}
+{"case_id":"V-16","variant":"v3","human":"pass","split":"train","note":"targetPremium 29,900 is 26 x 1,150 from the email; labeled as stated"}
+{"case_id":"GOLD-27","variant":"v3","human":"pass","split":"dev"}
+{"case_id":"GOLD-01","variant":"v1","human":"pass","split":"train"}
+{"case_id":"GOLD-02","variant":"v1","human":"pass","split":"dev"}
+{"case_id":"GOLD-03","variant":"v1","human":"fail","split":"dev","note":"targetPremium 52000 is the expiring premium; subclass Garden apartments never stated"}
+{"case_id":"GOLD-04","variant":"v1","human":"pass","split":"test"}
+{"case_id":"GOLD-05","variant":"v1","human":"fail","split":"test","note":"targetPremium 47500 is the expiring premium"}
+{"case_id":"GOLD-06","variant":"v1","human":"fail","split":"train","note":"targetPremium 185000 is the expiring premium; subclass Mid-rise for a stated high-rise"}
+{"case_id":"GOLD-07","variant":"v1","human":"fail","split":"dev","note":"subclass Garden apartments never stated (28-unit building, 3 stories)"}
+{"case_id":"GOLD-08","variant":"v1","human":"fail","split":"dev","note":"subclass Garden apartments never stated (apartment court)"}
+{"case_id":"GOLD-09","variant":"v1","human":"fail","split":"test","note":"targetPremium 31000 is the expiring premium"}
+{"case_id":"GOLD-10","variant":"v1","human":"fail","split":"test","note":"propertyAddress numbers 118/122 appear only in the attachment but source says both"}
+{"case_id":"V-01","variant":"v1","human":"pass","split":"train"}
+{"case_id":"V-02","variant":"v1","human":"pass","split":"dev"}
+{"case_id":"V-03","variant":"v1","human":"pass","split":"dev"}
+{"case_id":"V-04","variant":"v1","human":"fail","split":"test","note":"subclass Garden apartments never stated"}
+{"case_id":"V-05","variant":"v1","human":"pass","split":"test"}
+{"case_id":"V-06","variant":"v1","human":"pass","split":"train"}
+{"case_id":"V-07","variant":"v1","human":"pass","split":"dev"}
+{"case_id":"V-08","variant":"v1","human":"pass","split":"dev"}
+{"case_id":"V-09","variant":"v1","human":"fail","split":"test","note":"state TN not in the email; subclass Garden apartments never stated"}
+{"case_id":"V-10","variant":"v1","human":"fail","split":"test","note":"subclass Mid-rise inferred from 4 stories, never stated"}
+{"case_id":"V-11","variant":"v1","human":"pass","split":"train"}
+{"case_id":"V-12","variant":"v1","human":"pass","split":"dev"}
+{"case_id":"V-13","variant":"v1","human":"pass","split":"dev"}
+{"case_id":"V-14","variant":"v1","human":"pass","split":"test"}
+{"case_id":"V-15","variant":"v1","human":"fail","split":"test","note":"subclass Garden apartments never stated (apartment court)"}
+{"case_id":"V-16","variant":"v1","human":"pass","split":"train"}
+{"case_id":"GOLD-27","variant":"v1","human":"pass","split":"dev"}

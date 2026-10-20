@@ -49,15 +49,21 @@ export interface RunOptions {
 
 async function runChecks(suite: Suite, c: Case, o: VariantOutput) {
   const out: Record<string, boolean> = {};
+  const unanswered: string[] = [];
   for (const ch of suite.checks) {
     if (ch.applies && !ch.applies(c)) continue;
     try {
-      out[ch.id] = await ch.test(c, o);
+      const r = await ch.test(c, o);
+      if (r === null) unanswered.push(ch.id);
+      else out[ch.id] = r;
     } catch {
       out[ch.id] = false;
     }
   }
-  return out;
+  return {
+    checks: out,
+    unanswered: unanswered.length ? unanswered : undefined,
+  };
 }
 
 async function runOne(
@@ -111,7 +117,7 @@ async function runOne(
       metered: true,
       provider: "none",
     },
-    checks: o ? await runChecks(suite, c, o) : {},
+    ...(o ? await runChecks(suite, c, o) : { checks: {} }),
     extra: o?.extra,
     stages: o?.stages,
     output_hash: key,
@@ -159,7 +165,7 @@ export async function runSuite(suite: Suite, opts: RunOptions = {}) {
   };
   writeFileSync(
     join(dir, "run.json"),
-    JSON.stringify({ ...meta, case_order: cases.map((c) => c.id) }, null, 1),
+    JSON.stringify({ ...meta, case_order: all.map((c) => c.id) }, null, 1),
   );
   const inputText =
     suite.inputText ??
@@ -169,9 +175,26 @@ export async function runSuite(suite: Suite, opts: RunOptions = {}) {
     JSON.stringify(Object.fromEntries(cases.map((c) => [c.id, inputText(c)]))),
   );
   // Existing trace lines from an earlier attempt of the same run id are kept; the cache makes reruns free.
-  const done = new Set(
-    readTraces(dir).map((l) => `${l.variant}\u0000${l.case_id}`),
+  // A trace line whose cached output has been deleted is stale (someone threw the result out on
+  // purpose) and is dropped here so the pair runs again instead of being counted as done.
+  const kept = readTraces(dir).filter((l) => {
+    const c = all.find((x) => x.id === l.case_id);
+    return (
+      !!c &&
+      existsSync(
+        join(
+          dir,
+          "outputs",
+          `${l.variant}--${l.case_id}--${hash({ variant: l.variant, input: c.input })}.json`,
+        ),
+      )
+    );
+  });
+  writeFileSync(
+    join(dir, "traces.jsonl"),
+    kept.map((l) => JSON.stringify(l) + "\n").join(""),
   );
+  const done = new Set(kept.map((l) => `${l.variant}\u0000${l.case_id}`));
   const jobs: { v: Variant; c: Case }[] = [];
   for (const c of cases)
     for (const v of variants)
@@ -191,7 +214,7 @@ export async function runSuite(suite: Suite, opts: RunOptions = {}) {
   meta.finished_at = new Date().toISOString();
   writeFileSync(
     join(dir, "run.json"),
-    JSON.stringify({ ...meta, case_order: cases.map((c) => c.id) }, null, 1),
+    JSON.stringify({ ...meta, case_order: all.map((c) => c.id) }, null, 1),
   );
   return dir;
 }
@@ -210,9 +233,10 @@ export async function rescore(suite: Suite, dir: string) {
     const c = cases.get(l.case_id);
     const o = l.ok ? readOutput(dir, l) : undefined;
     if (!c || !o) continue;
-    const checks = await runChecks(suite, c, o);
+    const { checks, unanswered } = await runChecks(suite, c, o);
     if (JSON.stringify(checks) !== JSON.stringify(l.checks)) changed++;
     l.checks = checks;
+    l.unanswered = unanswered;
     scored++;
   }
   writeFileSync(

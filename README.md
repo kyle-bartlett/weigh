@@ -123,6 +123,69 @@ token count alone would have hidden:
   prompt tokens is not worth an unmeasurable recall risk on a job whose cost is video download time,
   not tokens.
 
+## Second suite: Exchange Triage's extraction prompts
+
+`suites/exchange-triage.ts` runs the Exchange Triage insurance-submission pipeline (intake, extraction,
+grounding, appetite; the referral writer off) over its 27-case golden set with four extraction prompts:
+v2 as the baseline (what shipped), v3 as the candidate (production, written after a live over-extraction),
+v2 run a second time as the noise floor, and v1, the frozen plain prompt, for the history. The suite imports
+the app's pipeline, prompts and field scorer by path (`ET_CHECKOUT`, default `~/wildcard/exchange-triage`)
+and injects a metered model adapter, so what it measures is what the app does. The model is Claude Sonnet
+through the CLI.
+
+Checks: extraction JSON matches the schema, every labelled field matches the golden value, construction
+type is the canonical ISO class, fields the source never states stay null, the routing decision matches.
+Two judge checks ask whether every `source` attribution is truthful (the value is stated in the document
+it names): Jev, TypeSafe's yes/no classifier, and Claude Haiku given only the source text and the
+extracted pairs. Both judges are validated against 54 hand labels in `suites/exchange-triage.labels.jsonl`.
+
+```sh
+bun src/cli.ts run suites/exchange-triage.ts
+bun src/cli.ts report exchange-triage                               # v3 against v2
+bun src/cli.ts report exchange-triage --baseline v1 --candidate v3  # the gate against the plain prompt
+bun src/cli.ts judge-validate exchange-triage suites/exchange-triage.labels.jsonl --check attribution_jev
+bun src/cli.ts judge-validate exchange-triage suites/exchange-triage.labels.jsonl --check attribution_claude
+```
+
+### What the run found (2026-10-19, 27 cases, 4 prompts, 108 pipeline runs)
+
+Reports, traces, judge validation and the review page are committed under
+`runs/examples/exchange-triage-2026-10-19`.
+
+| | v1 | v2 | v3 | v2-repeat |
+|---|---|---|---|---|
+| fields correct | 23 of 27 | 26 of 27 | 27 of 27 | 26 of 27 |
+| decision correct | 27 of 27 | 23 of 27 | 23 of 27 | 23 of 27 |
+| construction canonical | 14 of 18 | 18 of 18 | 18 of 18 | 18 of 18 |
+| prompt tokens per case | 4,362 | 4,778 | 5,076 | 4,775 |
+
+The gate passed v3 over v2: it fixed the one field v2 missed (the subclass guess the production fix was
+written for) and regressed nothing. The same gate run against v1 fails, because decision accuracy fell from
+27 to 23 of 27. Four broker emails say only "masonry". v1 copies the wording through and the appetite rules
+accept it; the canonical-class rule in v2 and v3 makes the model return null for a word that maps to two
+ISO classes, and a null construction type routes the file to a follow-up email. The app's own eval scored v2
+at 100 percent on decisions when it shipped, on an earlier Sonnet, so this is a model-version sensitivity
+the eval surfaced, not a prompt that was always wrong. The fix belongs in the prompt (a stated default for
+bare "masonry"), and the transition matrix pins every one of those failures to the appetite stage.
+
+Two harness lessons from the first pass, both now fixed in the runner:
+
+- One transient CLI outage cost 21 of 108 runs. The app routes a model failure to referral, which scores as a
+  wrong decision, so the adapter now retries with backoff and records every error on the trace. The resumed
+  run had zero.
+- Jev timed out on 57 of 71 calls under load and a silent judge was being scored as a failure. A check can
+  now return null, meaning "not evaluated"; the case is left out of that check's rate and named on the trace
+  line, so a judge that did not answer never votes.
+
+The judge validation is the part worth reading. Against the 54 labels, Jev never raised a false alarm
+(TNR 100 percent) but caught only half the real failures (TPR 50 percent; 30 percent on the test split), and
+Claude Haiku caught every real failure (TPR 100 percent) but flagged a third of the good extractions
+(TNR 65 percent), mostly canonical class names it read as inventions ("Duplex/fourplex schedule" for two
+stated fourplexes) and arithmetic on stated figures (26 units at $1,150). Neither judge alone earns the
+trust; together they do: Haiku pass means pass, Jev fail means fail, and the disagreements go to a person.
+The labeling rule should also say that arithmetic on stated figures counts as stated, which is the first
+change to make on the dev split before the next round of labels.
+
 ## Development
 
 ```sh
@@ -131,6 +194,7 @@ bun test
 bunx tsc --noEmit
 ```
 
-bun and TypeScript. One runtime dependency (zod). Model calls go through the subscription path in
+bun and TypeScript. One runtime dependency (zod). A suite that imports another repo names its checkout in an
+environment variable (`COS_CHECKOUT`, `ET_CHECKOUT`) and skips when it is missing. Model calls go through the subscription path in
 `~/.claude/PAI/TOOLS/Inference.ts` with the claude CLI's JSON envelope, which is where the metered
 token counts come from.

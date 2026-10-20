@@ -83,12 +83,35 @@ function build(
           meta.gate?.noRegressionOn ?? [],
         )
       : undefined;
-  return { meta, lines, cmp, gate: gateOf(cmp, meta.gate), noise };
+  return {
+    meta,
+    lines,
+    cmp,
+    gate: gateOf(cmp, meta.gate),
+    noise,
+    judges: readJudges(dir),
+  };
+}
+
+type JudgeRecord = ReturnType<typeof validate> & {
+  check: string;
+  labels: string;
+  at: string;
+};
+
+/** Validated judges live in <run dir>/judges.json keyed by check, so every later report shows all of them. */
+function readJudges(dir: string): JudgeRecord[] {
+  const p = join(dir, "judges.json");
+  if (!existsSync(p)) return [];
+  const rec = JSON.parse(readFileSync(p, "utf8")) as Record<
+    string,
+    JudgeRecord
+  >;
+  return Object.values(rec).sort((a, b) => a.check.localeCompare(b.check));
 }
 
 function writeReports(
   dir: string,
-  extra: { judge?: Parameters<typeof renderHtml>[0]["judge"] } = {},
   pick: { baseline?: string; candidate?: string } = {},
 ) {
   const def = readMeta(dir);
@@ -102,7 +125,7 @@ function writeReports(
     .filter(Boolean)
     .map((x) => "-" + x)
     .join("");
-  const r = { ...build(dir, pick), ...extra };
+  const r = build(dir, pick);
   const html = join(dir, `report${tag}.html`);
   writeFileSync(html, renderHtml(r));
   writeFileSync(join(dir, `summary${tag}.md`), renderMarkdown(r));
@@ -168,7 +191,7 @@ export async function main(argv = process.argv.slice(2)) {
       console.log(`review: ${join(dir, "review.html")}`);
       return 0;
     }
-    const r = writeReports(dir, {}, pick);
+    const r = writeReports(dir, pick);
     console.log(summaryLine(r));
     if (cmd === "report") console.log(`report: ${r.html}`);
     return r.gate.pass ? 0 : 1;
@@ -213,7 +236,18 @@ export async function main(argv = process.argv.slice(2)) {
     console.log(
       `${result.joined} labels matched a judge verdict; ${result.unmatched} did not.`,
     );
-    writeReports(dir, { judge: { ...result, check } });
+    const p = join(dir, "judges.json");
+    const all = existsSync(p)
+      ? (JSON.parse(readFileSync(p, "utf8")) as Record<string, JudgeRecord>)
+      : {};
+    all[check] = {
+      ...result,
+      check,
+      labels: labelsPath,
+      at: new Date().toISOString(),
+    };
+    writeFileSync(p, JSON.stringify(all, null, 1));
+    writeReports(dir);
     return 0;
   }
   throw new Error(usage);

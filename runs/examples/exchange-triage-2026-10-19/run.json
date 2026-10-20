@@ -1,0 +1,105 @@
+{
+ "run_id": "2026-10-19-prompts",
+ "suite": "exchange-triage",
+ "description": "Exchange Triage extraction prompts v1, v2 and v3 over the 27-case golden set, through the production pipeline (intake, extraction, grounding, appetite; writer off) on claude sonnet via the CLI. Baseline v2 (what shipped 2026-07-27), candidate v3 (production), v2-repeat as the noise floor, v1 as the frozen plain prompt. Reference: the golden labels. Judges: two source-attribution classifiers, validated against human labels in suites/exchange-triage.labels.jsonl.",
+ "started_at": "2026-10-20T04:58:19.418Z",
+ "cases": 27,
+ "skipped": [],
+ "variants": [
+  {
+   "name": "v2",
+   "description": "Extraction prompt v2: canonical construction classes and the broker-working-value rule. Shipped 2026-07-27."
+  },
+  {
+   "name": "v2-repeat",
+   "description": "v2 run a second time on identical inputs: the noise floor."
+  },
+  {
+   "name": "v3",
+   "description": "Extraction prompt v3, production: null-first subclass rule and source tied to a citable span, after a live over-extraction Arize caught."
+  },
+  {
+   "name": "v1",
+   "description": "Extraction prompt v1, frozen: plain instructions, no construction mapping, no few-shot examples."
+  }
+ ],
+ "checks": [
+  {
+   "id": "extraction_schema",
+   "description": "Extraction JSON matched the schema within the pipeline's two attempts.",
+   "kind": "code"
+  },
+  {
+   "id": "fields_correct",
+   "description": "Every labelled field matches the golden value under the app's own field scorer (0.5% on dollar amounts, canonical construction class, null means null).",
+   "kind": "code"
+  },
+  {
+   "id": "construction_canonical",
+   "description": "constructionType is the canonical ISO class the appetite rules consume, not the broker's wording.",
+   "kind": "code"
+  },
+  {
+   "id": "nulls_stay_null",
+   "description": "Fields the source never states come back null (no guessed TIV, year built, state or subclass).",
+   "kind": "code"
+  },
+  {
+   "id": "decision_correct",
+   "description": "The routing decision matches the golden label.",
+   "kind": "code"
+  },
+  {
+   "id": "attribution_jev",
+   "description": "Jev (TypeSafe yes/no classifier) says every `source` attribution is truthful: the value is stated in the document it names. Pass at probability 0.5 or above.",
+   "kind": "judge"
+  },
+  {
+   "id": "attribution_claude",
+   "description": "Claude Haiku, given only the source text and the extracted fields, says every `source` attribution is truthful.",
+   "kind": "judge"
+  }
+ ],
+ "baseline": "v2",
+ "candidate": "v3",
+ "gate": {
+  "maxPassAllDrop": 0,
+  "noRegressionOn": [
+   "decision_correct",
+   "fields_correct"
+  ]
+ },
+ "noise": "v2-repeat",
+ "command": "bun src/cli.ts run suites/exchange-triage.ts --run-id 2026-10-19-prompts",
+ "finished_at": "2026-10-20T04:59:54.667Z",
+ "case_order": [
+  "GOLD-01",
+  "GOLD-02",
+  "GOLD-03",
+  "GOLD-04",
+  "GOLD-05",
+  "GOLD-06",
+  "GOLD-07",
+  "GOLD-08",
+  "GOLD-09",
+  "GOLD-10",
+  "V-01",
+  "V-02",
+  "V-03",
+  "V-04",
+  "V-05",
+  "V-06",
+  "V-07",
+  "V-08",
+  "V-09",
+  "V-10",
+  "V-11",
+  "V-12",
+  "V-13",
+  "V-14",
+  "V-15",
+  "V-16",
+  "GOLD-27"
+ ],
+ "rescored_at": "2026-10-20T05:05:51.432Z"
+}

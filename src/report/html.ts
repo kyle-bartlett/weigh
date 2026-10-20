@@ -91,7 +91,7 @@ export interface ReportInput {
   cmp: Comparison;
   noise?: NoiseFloor;
   gate: GateResult;
-  judge?: ReturnType<typeof validate> & { check: string };
+  judges?: (ReturnType<typeof validate> & { check: string })[];
   generatedAt?: string;
 }
 
@@ -206,16 +206,18 @@ export function renderHtml(r: ReportInput): string {
     })
     .join("");
 
-  const judge = r.judge
-    ? `<section><div class="sec-head"><h2 class="display">Judge validation</h2><p>Check <b>${esc(r.judge.check)}</b> is a classifier. Its verdicts count only as far as they agree with a person's labels on a split it never saw. Positive means a failure is present.</p></div>
-<table><thead><tr><th>split</th><th class="num">n</th><th class="num">human fails</th><th class="num">human passes</th><th class="num">TPR</th><th class="num">TNR</th></tr></thead><tbody>${r.judge.splits
-        .map(
-          (s) =>
-            `<tr><td class="mono">${esc(s.split)}</td><td class="num">${s.n}</td><td class="num">${s.humanFails}</td><td class="num">${s.humanPasses}</td><td class="num">${pct(s.tpr)} <span style="color:var(--ink3)">${esc(ci(s.tprCi, (x) => pct(x, 0)))}</span></td><td class="num">${pct(s.tnr)} <span style="color:var(--ink3)">${esc(ci(s.tnrCi, (x) => pct(x, 0)))}</span></td></tr>`,
-        )
-        .join(
-          "",
-        )}</tbody></table><p class="notes" style="margin-top:10px">${r.judge.joined} labels matched a judge verdict; ${r.judge.unmatched} did not.</p></section>`
+  const judgeTable = (j: NonNullable<ReportInput["judges"]>[number]) =>
+    `<h3 class="mono" style="margin:18px 0 6px">${esc(j.check)}</h3>
+<table><thead><tr><th>split</th><th class="num">n</th><th class="num">human fails</th><th class="num">human passes</th><th class="num">TPR</th><th class="num">TNR</th></tr></thead><tbody>${j.splits
+      .map(
+        (s) =>
+          `<tr><td class="mono">${esc(s.split)}</td><td class="num">${s.n}</td><td class="num">${s.humanFails}</td><td class="num">${s.humanPasses}</td><td class="num">${pct(s.tpr)} <span style="color:var(--ink3)">${esc(ci(s.tprCi, (x) => pct(x, 0)))}</span></td><td class="num">${pct(s.tnr)} <span style="color:var(--ink3)">${esc(ci(s.tnrCi, (x) => pct(x, 0)))}</span></td></tr>`,
+      )
+      .join(
+        "",
+      )}</tbody></table><p class="notes" style="margin-top:6px">${j.joined} labels matched a judge verdict; ${j.unmatched} did not.</p>`;
+  const judge = r.judges?.length
+    ? `<section><div class="sec-head"><h2 class="display">Judge validation</h2><p>Each judge check is a classifier. Its verdicts count only as far as they agree with a person's labels on a split it never saw. Positive means a failure is present. TPR is the share of human-labelled failures the judge caught; TNR the share of human-labelled passes it left alone. Two judges on the same property can be compared row for row.</p></div>${r.judges.map(judgeTable).join("")}</section>`
     : "";
 
   const transitions = [B.variant, C.variant]
