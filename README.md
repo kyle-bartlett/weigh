@@ -125,7 +125,9 @@ token count alone would have hidden:
 
 ## Second suite: Exchange Triage's extraction prompts
 
-`suites/exchange-triage.ts` runs the Exchange Triage insurance-submission pipeline (intake, extraction,
+The Exchange Triage repo now carries this suite itself as `weigh/extraction-prompts.suite.ts`, which is
+what the agent runs; `suites/exchange-triage.ts` here is the same suite reaching the app by path for local
+runs. It runs the Exchange Triage insurance-submission pipeline (intake, extraction,
 grounding, appetite; the referral writer off) over its 27-case golden set with four extraction prompts:
 v2 as the baseline (what shipped), v3 as the candidate (production, written after a live over-extraction),
 v2 run a second time as the noise floor, and v1, the frozen plain prompt, for the history. The suite imports
@@ -185,6 +187,42 @@ stated fourplexes) and arithmetic on stated figures (26 units at $1,150). Neithe
 trust; together they do: Haiku pass means pass, Jev fail means fail, and the disagreements go to a person.
 The labeling rule should also say that arithmetic on stated figures counts as stated, which is the first
 change to make on the dev split before the next round of labels.
+
+## The platform: hub, agent, live pages
+
+The terminal tool is now one end of a platform. Live at https://weigh.bartlettlabs.io.
+
+- **Hub.** `weigh hub` is one Bun process with a SQLite file (zero dependencies beyond zod). It stores runs,
+  renders every page on the server from the same fragments the static report uses, and streams each run's
+  events over server-sent events. Pages: projects, a project's suites and runs, a run (verdict, proof strip,
+  checks, paired tokens, per-case ledger, judge validation, where runs fail, method), and a case (the input,
+  every variant's output, checks, usage, stages). A running run fills in live; the page reloads once into its
+  static form when the run ends.
+- **Agent.** `weigh agent` runs on the always-on machine that holds the Claude subscription login. It is
+  outbound only: it registers the suites it found, long-polls the hub for queued runs, spawns the CLI on the
+  suite, tails `events.jsonl` to the hub in order, uploads each finished output, heartbeats, and stops the run
+  when the hub says cancel. A hub outage mid-run costs nothing: a cursor file records what the hub has
+  acknowledged and the agent resumes the upload when it comes back. Retry resumes from the runner's cache.
+- **Any repo.** A project plugs in by shipping `weigh/<name>.suite.ts` (run `weigh init <repo>` for a
+  template and a copy of the types). The suite imports its own app by relative path and Weigh's helpers from
+  `WEIGH_HOME`. Which repos the agent may clone, what install command runs and what environment a suite sees
+  live in the agent's own config file, never in the hub.
+- **Access.** Three tokens with three scopes: admin (enqueue, cancel, retry, project settings), agent
+  (`/api/agent/*` only) and read (private projects and the MCP endpoint). Projects start private; anonymous
+  visitors see only the ones marked public. Local paths, keys and bearer tokens are scrubbed before anything
+  leaves the agent and again when the hub stores it.
+- **MCP.** `POST /mcp` (bearer) or `POST /mcp/<read token>` speaks JSON-RPC with six read-only tools:
+  `list_projects`, `list_runs`, `get_run_summary`, `get_run_checks`, `get_run_cases`, `get_judges`. Add it
+  as a connector and a Claude Dashboard artifact can query the hub directly.
+
+```sh
+weigh hub --port 8787 --db data/weigh.db          # WEIGH_ADMIN_TOKEN, WEIGH_AGENT_TOKEN, WEIGH_READ_TOKEN
+weigh import runs/<suite>/<run-id> --hub https://weigh.example --project <id> --token <agent token>
+weigh agent --config ~/.config/weigh/agent.json   # see deploy/launchd for the always-on setup
+weigh init ~/code/my-app --name main              # adds weigh/main.suite.ts and weigh/types.ts
+```
+
+The design and its decisions: `docs/superpowers/specs/2026-10-20-weigh-platform.md`.
 
 ## Development
 
