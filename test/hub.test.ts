@@ -124,6 +124,12 @@ describe("hub", () => {
     expect(
       (await get("/r/exchange-triage/2026-10-19-prompts/report.html")).status,
     ).toBe(200);
+    const frag = (await (
+      await get("/r/exchange-triage/2026-10-19-prompts/fragments")
+    ).json()) as Record<string, string>;
+    expect(frag.verdict).toContain("Gate passed");
+    expect(frag.ledger!.match(/data-case="/g)).toHaveLength(27);
+    expect((await get("/web/run.js")).status).toBe(200);
     const fromV1 = await (
       await get("/r/exchange-triage/2026-10-19-prompts?baseline=v1")
     ).text();

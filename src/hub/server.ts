@@ -2,7 +2,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RunStatus } from "../events.ts";
 import { buildFrom, type JudgeRecord } from "../report/build.ts";
-import { renderHtml } from "../report/html.ts";
+import {
+  caseLedger,
+  checksSection,
+  headline,
+  lede,
+  proofStrip,
+  renderHtml,
+  verdictBand,
+} from "../report/html.ts";
 import { renderMarkdown } from "../report/md.ts";
 import { scrub } from "../scrub.ts";
 import type { VariantOutput } from "../types.ts";
@@ -223,6 +231,26 @@ export function startHub(o: HubOptions) {
       const pick = pickOf(c.url);
       return html(
         runPage(project, run, built(run, pick), { pick, generatedAt: now() }),
+      );
+    }),
+    route("GET", "/r/:suite/:run/fragments", (c) => {
+      const { run } = visibleRun(c);
+      const b = built(run, pickOf(c.url));
+      const href = `/r/${run.suite}/${run.run_id}`;
+      return json(
+        b
+          ? {
+              headline: headline(b),
+              lede: lede(b),
+              verdict: verdictBand(b),
+              proof: proofStrip(b),
+              checks: checksSection(b),
+              ledger: caseLedger(
+                b,
+                (id) => `${href}/c/${encodeURIComponent(id)}`,
+              ),
+            }
+          : { lede: run.meta?.description ?? "" },
       );
     }),
     route("GET", "/r/:suite/:run/report.html", (c) => {
