@@ -137,7 +137,7 @@ Checks: extraction JSON matches the schema, every labelled field matches the gol
 type is the canonical ISO class, fields the source never states stay null, the routing decision matches.
 Two judge checks ask whether every `source` attribution is truthful (the value is stated in the document
 it names): Jev, TypeSafe's yes/no classifier, and Claude Haiku given only the source text and the
-extracted pairs. Both judges are validated against 54 hand labels in `suites/exchange-triage.labels.jsonl`.
+extracted pairs. Both judges are validated against 54 hand labels in `suites/exchange-triage.labels.jsonl` (drafted by the agent, reviewed and accepted by Kyle).
 
 ```sh
 bun src/cli.ts run suites/exchange-triage.ts
