@@ -41,11 +41,14 @@ export function ingest(
     }
     store.updateRun(key, { last_src_seq: lastSrc });
   })();
+  // Status follows what was newly stored: a replayed batch (an import run twice, an agent retry)
+  // must not move a finished run back to running.
+  const fresh = stored.map((e) => e.event);
   if (recompute) {
     const s = summarize(store, key);
     if (s) stored.push(s);
   }
-  const status = statusAfter(events);
+  const status = statusAfter(fresh);
   if (status) {
     const cur = store.getRun(key)!;
     if (cur.status !== status) {

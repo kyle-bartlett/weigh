@@ -455,8 +455,10 @@ export function startHub(o: HubOptions) {
       const records = (b.records ?? []).filter(
         (j) => j && typeof j.check === "string" && Array.isArray(j.splits),
       );
+      const before = JSON.stringify(store.judges(run.key));
       store.putJudges(run.key, scrub(records));
-      ingestSummary(run.key);
+      if (JSON.stringify(store.judges(run.key)) !== before)
+        ingestSummary(run.key);
       return json({ stored: records.length });
     }),
     route("POST", "/api/agent/runs/:suite/:run/finish", async (c) => {
