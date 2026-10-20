@@ -29,6 +29,8 @@ import { homePage, projectPage } from "./pages/home.ts";
 import { runPage } from "./pages/run.ts";
 import { type Project, type Run, runKey, Store, TERMINAL } from "./store.ts";
 import { Streams } from "./stream.ts";
+import { handleMcp } from "./mcp.ts";
+import { scopesOf } from "./auth.ts";
 
 /**
  * The hub: one Bun.serve, a route table, no framework. Public GETs for public projects, bearer or
@@ -164,6 +166,24 @@ export function startHub(o: HubOptions) {
     baseline: url.searchParams.get("baseline") || undefined,
     candidate: url.searchParams.get("candidate") || undefined,
   });
+
+  async function mcp(c: Ctx, s: Set<Scope>): Promise<Response> {
+    if (!s.has("read")) throw new HttpError(401, "unauthorized");
+    const body = (await readJson(c, 256 << 10)) as
+      | Record<string, unknown>
+      | Record<string, unknown>[];
+    const answer = (m: Record<string, unknown>) => handleMcp(store, m);
+    if (Array.isArray(body)) {
+      const out = body
+        .map(answer)
+        .filter((x): x is Record<string, unknown> => !!x);
+      return out.length
+        ? json(out)
+        : new Response(null, { status: 202, headers: SECURITY });
+    }
+    const r = answer(body);
+    return r ? json(r) : new Response(null, { status: 202, headers: SECURITY });
+  }
 
   /** Which projects each registered agent can run; rebuilt by every register call. */
   const agentProjects = new Map<string, string[]>();
@@ -405,6 +425,12 @@ export function startHub(o: HubOptions) {
       const p = store.upsertProject({ ...scrub(b), id: b.id });
       return json(p, 201);
     }),
+
+    // MCP: JSON-RPC over POST, read scope by bearer or by path token
+    route("POST", "/mcp", (c) => mcp(c, c.scopes)),
+    route("POST", "/mcp/:token", (c) =>
+      mcp(c, scopesOf(decodeURIComponent(c.params.token!), tokens)),
+    ),
 
     // admin: enqueue, cancel, retry
     route("POST", "/api/runs", async (c) => {
