@@ -44,10 +44,13 @@ const usage = `usage:
   weigh rescore <suite.ts> [run-id]       re-run the checks over a run's cached outputs (no model calls)
   weigh hub [--port N] [--db path]         serve the dashboard (tokens from WEIGH_ADMIN_TOKEN, WEIGH_AGENT_TOKEN, WEIGH_READ_TOKEN)
   weigh import <run-dir> --hub <url> --project <id> [--token-file path | --token t]
-                                          push a finished run directory to a hub`;
+                                          push a finished run directory to a hub
+  weigh agent [--config ~/.config/weigh/agent.json] [--once]
+                                          run suites for a hub on this machine
+  weigh init <repo-dir> [--name <suite>]  add weigh/<suite>.suite.ts and weigh/types.ts to a project`;
 
 /** Flags that take no value. Everything else starting with -- consumes the next argument. */
-const BOOL_FLAGS = new Set(["--no-events"]);
+const BOOL_FLAGS = new Set(["--no-events", "--once"]);
 
 function flag(args: string[], name: string) {
   const i = args.indexOf(name);
@@ -244,6 +247,38 @@ export async function main(argv = process.argv.slice(2)) {
     });
     console.error(`weigh hub listening on ${h.url}`);
     await new Promise(() => {});
+    return 0;
+  }
+  if (cmd === "agent") {
+    const { startAgent } = await import("./agent/main.ts");
+    await startAgent(flag(rest, "--config") ?? "~/.config/weigh/agent.json", {
+      once: rest.includes("--once"),
+    });
+    return 0;
+  }
+  if (cmd === "init") {
+    const repo = pos[0];
+    if (!repo) throw new Error(usage);
+    const name = flag(rest, "--name") ?? "main";
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name))
+      throw new Error("--name must be a lowercase slug");
+    const dir = join(resolve(repo), "weigh");
+    mkdirSync(dir, { recursive: true });
+    const types = join(dir, "types.ts");
+    writeFileSync(
+      types,
+      readFileSync(join(import.meta.dir, "types.ts"), "utf8"),
+    );
+    const suite = join(dir, `${name}.suite.ts`);
+    if (existsSync(suite)) throw new Error(`${suite} already exists`);
+    writeFileSync(
+      suite,
+      readFileSync(
+        join(import.meta.dir, "..", "templates", "weigh.suite.ts"),
+        "utf8",
+      ).replaceAll("__NAME__", name),
+    );
+    console.log(`wrote ${types}\nwrote ${suite}`);
     return 0;
   }
   if (cmd === "import") {

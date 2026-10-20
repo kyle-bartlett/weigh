@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.bartlettlabs.weigh-agent</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/kylebartlett/Library/Scripts/weigh/weigh-agent-launchd.sh</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/Users/kylebartlett/.bun/bin:/Users/kylebartlett/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>HOME</key>
+		<string>/Users/kylebartlett</string>
+	</dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>15</integer>
+	<key>StandardOutPath</key>
+	<string>/Users/kylebartlett/Library/Logs/weigh-agent.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/kylebartlett/Library/Logs/weigh-agent.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/kylebartlett</string>
+</dict>
+</plist>

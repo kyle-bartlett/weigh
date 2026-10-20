@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RunStatus } from "../events.ts";
+import { newRunId } from "../run.ts";
 import { buildFrom, type JudgeRecord } from "../report/build.ts";
 import {
   caseLedger,
@@ -49,6 +50,8 @@ const OUTPUT_GZ_CAP = 1 << 20;
 const OUTPUT_RUN_BUDGET = 32 << 20;
 const INPUT_CASE_CAP = 16 << 10;
 const JSON_CAP = 4 << 20;
+const LEASE_MS = 90_000;
+const CLAIM_POLL_MS = 500;
 
 const SECURITY = {
   "content-security-policy":
@@ -161,6 +164,22 @@ export function startHub(o: HubOptions) {
     baseline: url.searchParams.get("baseline") || undefined,
     candidate: url.searchParams.get("candidate") || undefined,
   });
+
+  /** Which projects each registered agent can run; rebuilt by every register call. */
+  const agentProjects = new Map<string, string[]>();
+  const sweep = setInterval(() => {
+    for (const r of store.expiredLeases()) {
+      store.updateRun(r.key, { status: "lost" });
+      const e = store.insertEvent(r.key, "hub", r.last_seq + 1, {
+        type: "status",
+        status: "lost",
+        agent_id: r.agent_id,
+        seq: 1,
+        at: now(),
+      });
+      if (e) streams.broadcast(r.key, [e]);
+    }
+  }, 30_000);
 
   const routes: Route[] = [
     route("GET", "/healthz", () => text("ok")),
@@ -387,6 +406,220 @@ export function startHub(o: HubOptions) {
       return json(p, 201);
     }),
 
+    // admin: enqueue, cancel, retry
+    route("POST", "/api/runs", async (c) => {
+      need(c, "admin");
+      const form = (c.req.headers.get("content-type") ?? "").includes(
+        "application/x-www-form-urlencoded",
+      );
+      const b = form
+        ? (Object.fromEntries((await c.req.formData()).entries()) as Record<
+            string,
+            string
+          >)
+        : ((await readJson(c)) as Record<string, unknown>);
+      const project = String(b.project ?? "");
+      const suite = String(b.suite ?? "");
+      const p = store.getProject(project);
+      const s = p && store.suite(project, suite);
+      if (!p || !s)
+        throw new HttpError(
+          404,
+          "no such project or suite (the agent registers suites)",
+        );
+      const runId = String(b.run_id || newRunId());
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(runId))
+        throw new HttpError(400, "bad run_id");
+      const list = (v: unknown) =>
+        typeof v === "string"
+          ? v
+              .split(",")
+              .map((x) => x.trim())
+              .filter(Boolean)
+          : Array.isArray(v)
+            ? v.map(String)
+            : undefined;
+      const options: Record<string, unknown> = {};
+      const variants = list(b.variants);
+      const cases = list(b.cases);
+      if (variants?.length) options.variants = variants;
+      if (cases?.length) options.cases = cases;
+      if (b.concurrency) options.concurrency = Number(b.concurrency);
+      const key = runKey(suite, runId);
+      if (store.getRun(key)) throw new HttpError(409, "run id already exists");
+      const run = store.createRun({
+        key,
+        project_id: project,
+        suite,
+        run_id: runId,
+        status: "queued",
+        options,
+      });
+      const e = store.insertEvent(key, "hub", 1, {
+        type: "status",
+        status: "queued",
+        seq: 1,
+        at: now(),
+      });
+      if (e) streams.broadcast(key, [e]);
+      if (form)
+        return new Response(null, {
+          status: 303,
+          headers: { location: `/r/${suite}/${runId}`, ...SECURITY },
+        });
+      return json(run, 201);
+    }),
+    route("POST", "/api/runs/:suite/:run/cancel", (c) => {
+      need(c, "admin");
+      const run = agentRun(c);
+      if (TERMINAL.has(run.status))
+        throw new HttpError(409, `run is ${run.status}`);
+      if (run.status === "queued") {
+        store.updateRun(run.key, { status: "cancelled", finished_at: now() });
+        const e = store.insertEvent(run.key, "hub", run.last_seq + 1, {
+          type: "status",
+          status: "cancelled",
+          seq: 1,
+          at: now(),
+        });
+        if (e) streams.broadcast(run.key, [e]);
+        return json({ status: "cancelled" });
+      }
+      store.updateRun(run.key, { cancel_requested: true });
+      return json({ status: run.status, cancel_requested: true });
+    }),
+    route("POST", "/api/runs/:suite/:run/retry", (c) => {
+      need(c, "admin");
+      const run = agentRun(c);
+      if (!TERMINAL.has(run.status) && run.status !== "lost")
+        throw new HttpError(409, `run is ${run.status}`);
+      store.updateRun(run.key, {
+        status: "queued",
+        agent_id: null,
+        lease_until: null,
+        cancel_requested: false,
+        finished_at: null,
+      });
+      const e = store.insertEvent(run.key, "hub", run.last_seq + 1, {
+        type: "status",
+        status: "queued",
+        seq: 1,
+        at: now(),
+      });
+      if (e) streams.broadcast(run.key, [e]);
+      return json({ status: "queued" });
+    }),
+
+    // agent: register, claim, heartbeat
+    route("POST", "/api/agent/register", async (c) => {
+      if (!c.scopes.has("agent") && !c.scopes.has("admin"))
+        throw new HttpError(401, "unauthorized");
+      const b = (await readJson(c)) as {
+        agent_id?: string;
+        version?: string;
+        projects?: {
+          id: string;
+          suites?: {
+            name: string;
+            path: string;
+            description?: string;
+            info?: Record<string, unknown>;
+          }[];
+        }[];
+      };
+      if (!b.agent_id || !/^[a-z0-9][a-z0-9-]*$/.test(b.agent_id))
+        throw new HttpError(400, "agent_id must be a slug");
+      let suites = 0;
+      for (const p of b.projects ?? []) {
+        if (!/^[a-z0-9][a-z0-9-]*$/.test(p.id)) continue;
+        store.upsertProject({ id: p.id });
+        for (const s of p.suites ?? []) {
+          if (
+            !/^[a-z0-9][a-z0-9-]*$/.test(s.name) ||
+            !s.path ||
+            s.path.includes("..")
+          )
+            continue;
+          store.upsertSuite({
+            project_id: p.id,
+            name: s.name,
+            description: scrub(s.description ?? ""),
+            path: s.path,
+            info: scrub(s.info ?? {}),
+          });
+          suites++;
+        }
+      }
+      agentProjects.set(
+        b.agent_id,
+        (b.projects ?? []).map((p) => p.id),
+      );
+      store.touchAgent(b.agent_id, scrub(b.version ?? ""), null);
+      return json({ projects: (b.projects ?? []).length, suites });
+    }),
+    route("GET", "/api/agent/jobs", async (c) => {
+      if (!c.scopes.has("agent") && !c.scopes.has("admin"))
+        throw new HttpError(401, "unauthorized");
+      const agent = c.url.searchParams.get("agent") ?? "";
+      const projects = agentProjects.get(agent);
+      if (!projects) throw new HttpError(409, "register first");
+      const wait =
+        Math.min(Number(c.url.searchParams.get("wait")) || 0, 50) * 1000;
+      const until = Date.now() + wait;
+      for (;;) {
+        const run = store.claimNext(agent, projects, LEASE_MS);
+        if (run) {
+          store.touchAgent(agent, "", run.key);
+          const s = store.suite(run.project_id, run.suite);
+          const e = store.insertEvent(run.key, "hub", run.last_seq + 1, {
+            type: "status",
+            status: "claimed",
+            agent_id: agent,
+            seq: 1,
+            at: now(),
+          });
+          if (e) streams.broadcast(run.key, [e]);
+          return json({
+            key: run.key,
+            project_id: run.project_id,
+            suite: run.suite,
+            run_id: run.run_id,
+            suite_path: s?.path ?? "",
+            options: run.options,
+            src_seq_base: run.last_src_seq,
+          });
+        }
+        if (Date.now() >= until)
+          return new Response(null, { status: 204, headers: SECURITY });
+        await Bun.sleep(CLAIM_POLL_MS);
+      }
+    }),
+    route("POST", "/api/agent/runs/:suite/:run/heartbeat", async (c) => {
+      if (!c.scopes.has("agent") && !c.scopes.has("admin"))
+        throw new HttpError(401, "unauthorized");
+      const run = agentRun(c);
+      await readJson(c).catch(() => ({}));
+      const status: RunStatus =
+        run.status === "lost" || run.status === "claimed"
+          ? "running"
+          : run.status;
+      store.updateRun(run.key, {
+        lease_until: new Date(Date.now() + LEASE_MS).toISOString(),
+        status,
+      });
+      if (status !== run.status) {
+        const e = store.insertEvent(run.key, "hub", run.last_seq + 1, {
+          type: "status",
+          status,
+          agent_id: run.agent_id,
+          seq: 1,
+          at: now(),
+        });
+        if (e) streams.broadcast(run.key, [e]);
+      }
+      return json({ cancel: run.cancel_requested });
+    }),
+
     // agent API (also used by `weigh import`)
     route("POST", "/api/agent/runs", async (c) => {
       if (!c.scopes.has("agent") && !c.scopes.has("admin"))
@@ -423,13 +656,22 @@ export function startHub(o: HubOptions) {
       if (!c.scopes.has("agent") && !c.scopes.has("admin"))
         throw new HttpError(401, "unauthorized");
       const run = agentRun(c);
-      const b = (await readJson(c, EVENTS_BODY_CAP)) as { events?: unknown[] };
+      const b = (await readJson(c, EVENTS_BODY_CAP)) as {
+        events?: unknown[];
+        source?: string;
+      };
       if (!Array.isArray(b.events) || b.events.length > EVENTS_PER_BATCH)
         throw new HttpError(
           400,
           `events must be an array of at most ${EVENTS_PER_BATCH}`,
         );
-      const r = ingest(store, streams, run.key, b.events, "runner");
+      const r = ingest(
+        store,
+        streams,
+        run.key,
+        b.events,
+        b.source === "agent" ? "agent" : "runner",
+      );
       return json({ accepted: r.accepted, last_src_seq: r.last_src_seq });
     }),
     route(
@@ -561,6 +803,7 @@ export function startHub(o: HubOptions) {
     streams,
     url: `http://${server.hostname === "0.0.0.0" ? "127.0.0.1" : server.hostname}:${server.port}`,
     stop: () => {
+      clearInterval(sweep);
       server.stop(true);
       store.db.close();
     },

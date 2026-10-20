@@ -244,6 +244,41 @@ export class Store {
     );
   }
 
+  /** Atomically hand the oldest queued run in one of the agent's projects to that agent. */
+  claimNext(
+    agentId: string,
+    projectIds: string[],
+    leaseMs: number,
+  ): Run | undefined {
+    if (!projectIds.length) return undefined;
+    const marks = projectIds.map(() => "?").join(",");
+    const row = this.db
+      .query(
+        `UPDATE runs SET status = 'claimed', agent_id = ?, lease_until = ?
+         WHERE key = (SELECT key FROM runs WHERE status = 'queued' AND project_id IN (${marks}) ORDER BY requested_at LIMIT 1)
+         RETURNING *`,
+      )
+      .get(
+        agentId,
+        new Date(Date.now() + leaseMs).toISOString(),
+        ...projectIds,
+      ) as Raw | null;
+    return row ? run(row) : undefined;
+  }
+  /** Runs whose agent stopped heartbeating. */
+  expiredLeases(): Run[] {
+    return (
+      this.db
+        .query(
+          "SELECT * FROM runs WHERE status IN ('claimed','running') AND lease_until IS NOT NULL AND lease_until < ?",
+        )
+        .all(new Date().toISOString()) as Raw[]
+    ).map(run);
+  }
+  suite(projectId: string, name: string): SuiteRow | undefined {
+    return this.listSuites(projectId).find((s) => s.name === name);
+  }
+
   // events
 
   /** Appends one event; returns the stored row, or undefined when (source, src_seq) was already stored. */

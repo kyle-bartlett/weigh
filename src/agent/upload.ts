@@ -46,17 +46,60 @@ export class HubClient {
     }).then((r) => r.json());
   }
 
+  register(body: {
+    agent_id: string;
+    version: string;
+    projects: {
+      id: string;
+      suites: {
+        name: string;
+        path: string;
+        description: string;
+        info: Record<string, unknown>;
+      }[];
+    }[];
+  }) {
+    return this.json("POST", "/api/agent/register", body) as Promise<{
+      projects: number;
+      suites: number;
+    }>;
+  }
+  /** Long-poll for the next queued run; undefined when none within `waitS`. */
+  async claim(agentId: string, waitS: number): Promise<Job | undefined> {
+    const res = await this.call(
+      "GET",
+      `/api/agent/jobs?agent=${enc(agentId)}&wait=${waitS}`,
+    );
+    if (res.status === 204) return undefined;
+    return (await res.json()) as Job;
+  }
+  heartbeat(
+    suite: string,
+    runId: string,
+    body: { finished: number; total: number; status: string },
+  ) {
+    return this.json(
+      "POST",
+      `/api/agent/runs/${enc(suite)}/${enc(runId)}/heartbeat`,
+      body,
+    ) as Promise<{ cancel: boolean }>;
+  }
   createRun(r: { project: string; suite: string; run_id: string }) {
     return this.json("POST", "/api/agent/runs", r) as Promise<{
       key: string;
       created: boolean;
     }>;
   }
-  postEvents(suite: string, runId: string, events: RunEvent[]) {
+  postEvents(
+    suite: string,
+    runId: string,
+    events: RunEvent[],
+    source: "runner" | "agent" = "runner",
+  ) {
     return this.json(
       "POST",
       `/api/agent/runs/${enc(suite)}/${enc(runId)}/events`,
-      { events },
+      { events, source },
     ) as Promise<{ accepted: number; last_src_seq: number }>;
   }
   async putOutput(
@@ -106,6 +149,18 @@ export class HubClient {
 }
 
 const enc = encodeURIComponent;
+
+/** What the hub hands an agent when it claims a queued run. */
+export interface Job {
+  key: string;
+  project_id: string;
+  suite: string;
+  run_id: string;
+  suite_path: string;
+  options: { variants?: string[]; cases?: string[]; concurrency?: number };
+  /** Runner seq offset for this attempt so retries extend one sequence instead of colliding. */
+  src_seq_base: number;
+}
 
 /** Scrub a trace line and normalize nothing else; the hub scrubs again on ingest. */
 export const outboundLine = (l: TraceLine): TraceLine => scrub(l);
