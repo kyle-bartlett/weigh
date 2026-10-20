@@ -142,6 +142,8 @@ export interface RunMeta {
   description: string;
   started_at: string;
   finished_at?: string;
+  /** Set when the run was stopped by a cancel (SIGTERM or an AbortSignal) before every pair ran. */
+  cancelled_at?: string;
   /** Set when checks were re-run over cached outputs after the run. */
   rescored_at?: string;
   cases: number;

@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import type { RunnerEvent } from "./events.ts";
 import type {
   Case,
   RunMeta,
@@ -22,6 +23,9 @@ import type {
  * variant name and the case input, so a crashed or interrupted run resumes without spending a
  * model call twice. One trace line per (case, variant) lands in traces.jsonl as it finishes.
  */
+
+/** An event before the runner stamps seq and at. Distributes over the union so each variant keeps its own fields. */
+type Unstamped<T> = T extends unknown ? Omit<T, "seq" | "at"> : never;
 
 export const RUNS_DIR =
   process.env.WEIGH_RUNS ?? join(import.meta.dir, "..", "runs");
@@ -45,6 +49,10 @@ export interface RunOptions {
   concurrency?: number;
   command?: string;
   log?: (s: string) => void;
+  /** Every runner event in order (run_start, job_start, job_done, run_done or run_cancelled, run_error). */
+  onEvent?: (e: RunnerEvent) => void;
+  /** Abort stops workers from taking another pair; the pair in flight finishes and is kept. */
+  signal?: AbortSignal;
 }
 
 async function runChecks(suite: Suite, c: Case, o: VariantOutput) {
@@ -133,6 +141,13 @@ export async function runSuite(suite: Suite, opts: RunOptions = {}) {
   const dir = runDir(suite.name, runId);
   mkdirSync(join(dir, "outputs"), { recursive: true });
   const log = opts.log ?? ((s: string) => console.error(s));
+  let seq = 0;
+  const emit = (e: Unstamped<RunnerEvent>) =>
+    opts.onEvent?.({
+      ...e,
+      seq: ++seq,
+      at: new Date().toISOString(),
+    } as RunnerEvent);
   const all = await suite.cases();
   const cases = opts.cases
     ? all.filter((c) => opts.cases!.includes(c.id))
@@ -200,18 +215,44 @@ export async function runSuite(suite: Suite, opts: RunOptions = {}) {
     for (const v of variants)
       if (!done.has(`${v.name}\u0000${c.id}`)) jobs.push({ v, c });
   const width = opts.concurrency ?? suite.concurrency ?? 2;
+  const total = jobs.length;
   let finished = 0;
+  emit({
+    type: "run_start",
+    run_id: runId,
+    suite: suite.name,
+    meta,
+    case_order: all.map((c) => c.id),
+    total,
+    resumed: kept.length,
+  });
   const worker = async () => {
-    for (let j = jobs.shift(); j; j = jobs.shift()) {
+    for (let j = jobs.shift(); j && !opts.signal?.aborted; j = jobs.shift()) {
+      emit({ type: "job_start", variant: j.v.name, case_id: j.c.id });
       const line = await runOne(suite, j.v, j.c, dir, meta);
       finished++;
+      emit({ type: "job_done", line, finished, total });
       log(
         `${String(finished).padStart(3)}/${jobs.length + finished} ${j.v.name.padEnd(12)} ${j.c.id.padEnd(14)} ${line.ok ? "ok " : "ERR"} ${Object.values(line.checks).filter((x) => !x).length} failing  ${line.usage.inputTokens + line.usage.cacheReadTokens + line.usage.cacheCreationTokens} prompt tok${line.cached ? "  (cached)" : ""}`,
       );
     }
   };
-  await Promise.all(Array.from({ length: width }, worker));
-  meta.finished_at = new Date().toISOString();
+  try {
+    await Promise.all(Array.from({ length: width }, worker));
+  } catch (e) {
+    emit({
+      type: "run_error",
+      error: String(e instanceof Error ? e.message : e).slice(0, 500),
+    });
+    throw e;
+  }
+  if (opts.signal?.aborted && finished < total) {
+    meta.cancelled_at = new Date().toISOString();
+    emit({ type: "run_cancelled", finished, total });
+  } else {
+    meta.finished_at = new Date().toISOString();
+    emit({ type: "run_done", finished_at: meta.finished_at });
+  }
   writeFileSync(
     join(dir, "run.json"),
     JSON.stringify({ ...meta, case_order: all.map((c) => c.id) }, null, 1),

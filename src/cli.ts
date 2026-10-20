@@ -1,18 +1,28 @@
 #!/usr/bin/env bun
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { z } from "zod";
 import { readLabels, validate } from "./judge.ts";
+import { build, type JudgeRecord, summaryLine } from "./report/build.ts";
 import { renderHtml } from "./report/html.ts";
 import { renderMarkdown } from "./report/md.ts";
 import { renderReview } from "./review.ts";
-import { readMeta, readTraces, resolveRun, runSuite, rescore } from "./run.ts";
 import {
-  compare,
-  gate as gateOf,
-  noiseFloor,
-  pct,
-  signedPct,
-} from "./stats.ts";
+  newRunId,
+  readMeta,
+  readTraces,
+  rescore,
+  resolveRun,
+  runDir,
+  runSuite,
+} from "./run.ts";
+import { pct } from "./stats.ts";
 import type { Suite, TraceLine } from "./types.ts";
 
 /**
@@ -24,13 +34,17 @@ import type { Suite, TraceLine } from "./types.ts";
  */
 
 const usage = `usage:
-  weigh run <suite.ts> [--variants a,b] [--cases id,id] [--concurrency N] [--run-id ID]
+  weigh run <suite.ts> [--variants a,b] [--cases id,id] [--concurrency N] [--run-id ID] [--events path | --no-events]
   weigh report <suite> [run-id] [--candidate name] [--baseline name]
   weigh gate <suite> [run-id] [--candidate name] [--baseline name]
   weigh review <suite> [run-id]
   weigh judge-validate <suite> <labels.jsonl> --check <id> [run-id]
   weigh cases <suite.ts>                  build and list the cases (fetches and caches inputs)
+  weigh suite-info <suite.ts>             print the suite's name, variants, checks and gate as JSON (no cases built)
   weigh rescore <suite.ts> [run-id]       re-run the checks over a run's cached outputs (no model calls)`;
+
+/** Flags that take no value. Everything else starting with -- consumes the next argument. */
+const BOOL_FLAGS = new Set(["--no-events"]);
 
 function flag(args: string[], name: string) {
   const i = args.indexOf(name);
@@ -38,10 +52,79 @@ function flag(args: string[], name: string) {
 }
 const positional = (args: string[]) =>
   args.filter(
-    (a, i) => !a.startsWith("--") && !(i > 0 && args[i - 1]!.startsWith("--")),
+    (a, i) =>
+      !a.startsWith("--") &&
+      !(
+        i > 0 &&
+        args[i - 1]!.startsWith("--") &&
+        !BOOL_FLAGS.has(args[i - 1]!)
+      ),
   );
 
-async function loadSuite(path: string): Promise<Suite> {
+const isFn = z.custom<(...a: never[]) => unknown>(
+  (v) => typeof v === "function",
+  "must be a function",
+);
+
+/** The shape a suite module must have. Errors name the field, so a repo author fixes it without reading Weigh. */
+export const SuiteSchema = z
+  .object({
+    name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "lowercase slug"),
+    description: z.string(),
+    cases: isFn,
+    variants: z
+      .array(
+        z.object({
+          name: z.string().min(1),
+          description: z.string(),
+          run: isFn,
+        }),
+      )
+      .min(1),
+    checks: z.array(
+      z.object({
+        id: z.string().min(1),
+        description: z.string(),
+        kind: z.enum(["code", "judge"]),
+        test: isFn,
+        applies: isFn.optional(),
+      }),
+    ),
+    baseline: z.string().min(1),
+    candidate: z.string().min(1),
+    gate: z
+      .object({
+        maxPassAllDrop: z.number().min(0).max(1).optional(),
+        noRegressionOn: z.array(z.string()).optional(),
+      })
+      .optional(),
+    noise: z.string().optional(),
+    concurrency: z.number().int().positive().optional(),
+    inputText: isFn.optional(),
+    skipped: isFn.optional(),
+  })
+  .superRefine((s, ctx) => {
+    const names = new Set(s.variants.map((v) => v.name));
+    for (const k of ["baseline", "candidate", "noise"] as const) {
+      const v = s[k];
+      if (v && !names.has(v))
+        ctx.addIssue({
+          code: "custom",
+          path: [k],
+          message: `names no variant (have ${[...names].join(", ")})`,
+        });
+    }
+    const ids = new Set(s.checks.map((c) => c.id));
+    for (const id of s.gate?.noRegressionOn ?? [])
+      if (!ids.has(id))
+        ctx.addIssue({
+          code: "custom",
+          path: ["gate", "noRegressionOn"],
+          message: `${id} is not a check id`,
+        });
+  });
+
+export async function loadSuite(path: string): Promise<Suite> {
   const mod = (await import(resolve(path))) as {
     default?: Suite;
     suite?: Suite;
@@ -49,66 +132,36 @@ async function loadSuite(path: string): Promise<Suite> {
   const s = mod.default ?? mod.suite;
   if (!s)
     throw new Error(`${path} exports no suite (default or named "suite")`);
+  const r = SuiteSchema.safeParse(s);
+  if (!r.success)
+    throw new Error(
+      `${path} is not a valid suite:\n` +
+        r.error.issues
+          .map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`)
+          .join("\n"),
+    );
   return s;
 }
 
-function build(
-  dir: string,
-  pick: { baseline?: string; candidate?: string } = {},
-) {
-  const meta = readMeta(dir);
-  if (pick.baseline) meta.baseline = pick.baseline;
-  if (pick.candidate) meta.candidate = pick.candidate;
-  const lines = readTraces(dir);
-  const cmp = compare(
-    lines,
-    meta.baseline,
-    meta.candidate,
-    meta.checks.map((c) => c.id),
-    meta.case_order,
-  );
-  const noise =
-    meta.noise &&
-    meta.noise !== meta.candidate &&
-    lines.some((l) => l.variant === meta.noise)
-      ? noiseFloor(
-          cmp,
-          compare(
-            lines,
-            meta.baseline,
-            meta.noise,
-            meta.checks.map((c) => c.id),
-            meta.case_order,
-          ),
-          meta.gate?.noRegressionOn ?? [],
-        )
-      : undefined;
-  return {
-    meta,
-    lines,
-    cmp,
-    gate: gateOf(cmp, meta.gate),
-    noise,
-    judges: readJudges(dir),
-  };
-}
-
-type JudgeRecord = ReturnType<typeof validate> & {
-  check: string;
-  labels: string;
-  at: string;
-};
-
-/** Validated judges live in <run dir>/judges.json keyed by check, so every later report shows all of them. */
-function readJudges(dir: string): JudgeRecord[] {
-  const p = join(dir, "judges.json");
-  if (!existsSync(p)) return [];
-  const rec = JSON.parse(readFileSync(p, "utf8")) as Record<
-    string,
-    JudgeRecord
-  >;
-  return Object.values(rec).sort((a, b) => a.check.localeCompare(b.check));
-}
+/** What the agent needs to register a suite with the hub, without building a single case. */
+export const suiteInfo = (s: Suite) => ({
+  name: s.name,
+  description: s.description,
+  variants: s.variants.map((v) => ({
+    name: v.name,
+    description: v.description,
+  })),
+  checks: s.checks.map((c) => ({
+    id: c.id,
+    description: c.description,
+    kind: c.kind,
+  })),
+  baseline: s.baseline,
+  candidate: s.candidate,
+  gate: s.gate,
+  noise: s.noise,
+  concurrency: s.concurrency,
+});
 
 function writeReports(
   dir: string,
@@ -139,17 +192,49 @@ export async function main(argv = process.argv.slice(2)) {
     const path = pos[0];
     if (!path) throw new Error(usage);
     const suite = await loadSuite(path);
+    const runId = flag(rest, "--run-id") ?? newRunId();
+    // Events go to <run dir>/events.jsonl unless told otherwise; the agent tails that file to the hub.
+    const eventsPath = rest.includes("--no-events")
+      ? undefined
+      : (flag(rest, "--events") ??
+        join(runDir(suite.name, runId), "events.jsonl"));
+    if (eventsPath) {
+      mkdirSync(dirname(eventsPath), { recursive: true });
+      writeFileSync(eventsPath, "");
+    }
+    const ac = new AbortController();
+    const stop = () => ac.abort();
+    process.once("SIGTERM", stop);
+    process.once("SIGINT", stop);
     const dir = await runSuite(suite, {
       variants: flag(rest, "--variants")?.split(","),
       cases: flag(rest, "--cases")?.split(","),
       concurrency: Number(flag(rest, "--concurrency")) || undefined,
-      runId: flag(rest, "--run-id"),
+      runId,
       command: `bun src/cli.ts run ${path}${rest.filter((a) => a !== path).length ? " " + rest.filter((a) => a !== path).join(" ") : ""}`,
+      signal: ac.signal,
+      onEvent: eventsPath
+        ? (e) => appendFileSync(eventsPath, JSON.stringify(e) + "\n")
+        : undefined,
     });
+    process.off("SIGTERM", stop);
+    process.off("SIGINT", stop);
+    if (ac.signal.aborted) {
+      console.error(
+        `cancelled; partial run kept at ${dir} (rerun the same --run-id to resume)`,
+      );
+      return 130;
+    }
     const r = writeReports(dir);
     console.log(summaryLine(r));
     console.log(`report: ${join(dir, "report.html")}`);
     return r.gate.pass ? 0 : 1;
+  }
+  if (cmd === "suite-info") {
+    const path = pos[0];
+    if (!path) throw new Error(usage);
+    console.log(JSON.stringify(suiteInfo(await loadSuite(path)), null, 1));
+    return 0;
   }
   if (cmd === "cases") {
     const path = pos[0];
@@ -251,11 +336,6 @@ export async function main(argv = process.argv.slice(2)) {
     return 0;
   }
   throw new Error(usage);
-}
-
-function summaryLine(r: ReturnType<typeof build>) {
-  const { cmp, gate } = r;
-  return `${gate.pass ? "GATE PASS" : "GATE FAIL"}  pass-all ${pct(cmp.baseline.passAll.rate)} -> ${pct(cmp.candidate.passAll.rate)}  prompt tokens ${signedPct(cmp.promptTokens.pctChange)}  cost ${signedPct(cmp.costUsd.pctChange)}  latency ${signedPct(cmp.latencyMs.pctChange)}  n=${cmp.promptTokens.n}${gate.pass ? "" : "  (" + gate.reasons.join("; ") + ")"}${r.noise ? `  noise floor: ${r.noise.within ? "within" : "beyond"} (${r.noise.variant} moved pass-all ${signedPct(-r.noise.passAllDrop)})` : ""}`;
 }
 
 if (import.meta.main) {
