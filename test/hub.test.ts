@@ -104,6 +104,22 @@ describe("hub", () => {
       await get("/r/exchange-triage/2026-10-19-prompts/c/GOLD-01")
     ).text();
     expect(casePage).toContain("Output not archived");
+    // An archived output renders on the case page as the model's text.
+    await client.putOutput(
+      "exchange-triage",
+      "2026-10-19-prompts",
+      "v3",
+      "GOLD-01",
+      "abc",
+      JSON.stringify({
+        output: { decision: "IN APPETITE", note: "archived output text" },
+        usage: {},
+      }),
+    );
+    const withOutput = await (
+      await get("/r/exchange-triage/2026-10-19-prompts/c/GOLD-01")
+    ).text();
+    expect(withOutput).toContain("archived output text");
     expect(casePage).toContain("Maple Row Apartments");
     expect(
       (await get("/r/exchange-triage/2026-10-19-prompts/report.html")).status,

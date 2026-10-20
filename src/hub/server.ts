@@ -260,11 +260,10 @@ export function startHub(o: HubOptions) {
           const raw = Buffer.from(
             Bun.gunzipSync(o.gz as Uint8Array<ArrayBuffer>),
           ).toString("utf8");
+          // Stored as the VariantOutput itself (what readOutput returns), never the cache file's wrapper.
           let output: VariantOutput | undefined;
           try {
-            output =
-              (JSON.parse(raw) as { output?: VariantOutput }).output ??
-              (JSON.parse(raw) as VariantOutput);
+            output = JSON.parse(raw) as VariantOutput;
           } catch {
             output = { output: raw, usage: l.usage };
           }
