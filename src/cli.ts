@@ -41,7 +41,10 @@ const usage = `usage:
   weigh judge-validate <suite> <labels.jsonl> --check <id> [run-id]
   weigh cases <suite.ts>                  build and list the cases (fetches and caches inputs)
   weigh suite-info <suite.ts>             print the suite's name, variants, checks and gate as JSON (no cases built)
-  weigh rescore <suite.ts> [run-id]       re-run the checks over a run's cached outputs (no model calls)`;
+  weigh rescore <suite.ts> [run-id]       re-run the checks over a run's cached outputs (no model calls)
+  weigh hub [--port N] [--db path]         serve the dashboard (tokens from WEIGH_ADMIN_TOKEN, WEIGH_AGENT_TOKEN, WEIGH_READ_TOKEN)
+  weigh import <run-dir> --hub <url> --project <id> [--token-file path | --token t]
+                                          push a finished run directory to a hub`;
 
 /** Flags that take no value. Everything else starting with -- consumes the next argument. */
 const BOOL_FLAGS = new Set(["--no-events"]);
@@ -229,6 +232,38 @@ export async function main(argv = process.argv.slice(2)) {
     console.log(summaryLine(r));
     console.log(`report: ${join(dir, "report.html")}`);
     return r.gate.pass ? 0 : 1;
+  }
+  if (cmd === "hub") {
+    const { startHub } = await import("./hub/server.ts");
+    const h = startHub({
+      port: Number(flag(rest, "--port")) || Number(process.env.PORT) || 8787,
+      dbPath:
+        flag(rest, "--db") ??
+        process.env.WEIGH_DB ??
+        join(import.meta.dir, "..", "data", "weigh.db"),
+    });
+    console.error(`weigh hub listening on ${h.url}`);
+    await new Promise(() => {});
+    return 0;
+  }
+  if (cmd === "import") {
+    const dir = pos[0];
+    const hub = flag(rest, "--hub");
+    const project = flag(rest, "--project");
+    const tokenFile = flag(rest, "--token-file");
+    const token =
+      flag(rest, "--token") ??
+      (tokenFile ? readFileSync(tokenFile, "utf8").trim() : undefined) ??
+      process.env.WEIGH_AGENT_TOKEN ??
+      process.env.WEIGH_ADMIN_TOKEN;
+    if (!dir || !hub || !project || !token) throw new Error(usage);
+    const { HubClient, importRunDir } = await import("./agent/upload.ts");
+    const r = await importRunDir(new HubClient(hub, token), resolve(dir), {
+      project,
+      log: (s) => console.error(s),
+    });
+    console.log(`${hub.replace(/\/$/, "")}/r/${r.suite}/${r.run_id}`);
+    return 0;
   }
   if (cmd === "suite-info") {
     const path = pos[0];

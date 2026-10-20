@@ -65,7 +65,7 @@ footer{padding-top:24px;border-top:1px solid var(--line);font-size:13px;color:va
 @media (max-width:900px){.two,.sec-head{grid-template-columns:1fr}.proof{grid-template-columns:repeat(2,minmax(0,1fr))}.proof div{padding-left:0}}
 `;
 
-const FONTS = `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">`;
+export const FONTS = `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">`;
 
 export const esc = (s: unknown) =>
   String(s).replace(
@@ -108,7 +108,7 @@ function noiseBand(r: ReportInput): string {
   return `<div class="verdict noise"><span class="dot"></span><div><b>Noise floor: the candidate's change is ${n.within ? "within" : "beyond"} it.</b> <span>The baseline run twice (${esc(r.cmp.baseline.variant)} against ${esc(n.variant)}) moved pass-all ${signedPct(-n.passAllDrop)} against the candidate's ${signedPct(-n.candidatePassAllDrop)}${checks ? "; " + checks : ""}. A drop no larger than the baseline's own drift is not evidence of a regression.</span></div></div>`;
 }
 
-function stripPlot(cmp: Comparison): string {
+export function stripPlot(cmp: Comparison): string {
   const b = cmp.baseline.usage.promptTokens,
     c = cmp.candidate.usage.promptTokens;
   if (!b.length) return "";
@@ -151,33 +151,109 @@ function transitionTable(lines: TraceLine[], variant: string) {
     )}</tbody></table><p class="notes" style="margin-top:8px">${m.failures} of ${m.total} traces failed a stage.</p>`;
 }
 
-export function renderHtml(r: ReportInput): string {
-  const { meta, cmp, gate } = r;
-  const B = cmp.baseline,
-    C = cmp.candidate;
-  const checkIds = meta.checks.map((c) => c.id);
+/**
+ * The report is a sequence of fragments so the hub's pages and its live summary events can reuse each
+ * one. Every fragment takes the same ReportInput the whole report takes.
+ */
+
+/** What every fragment needs: the paired variants, the case order both completed, the token delta. */
+function ctx(r: ReportInput) {
+  const B = r.cmp.baseline,
+    C = r.cmp.candidate;
+  const checkIds = r.meta.checks.map((c) => c.id);
   const byVar = (v: string) =>
     new Map(r.lines.filter((l) => l.variant === v).map((l) => [l.case_id, l]));
   const bl = byVar(B.variant),
     cl = byVar(C.variant);
-  const order = meta.case_order.filter((id) => bl.has(id) && cl.has(id));
-  const tokDelta = cmp.promptTokens.pctChange;
-  const title = gate.pass
+  const order = r.meta.case_order.filter((id) => bl.has(id) && cl.has(id));
+  return {
+    B,
+    C,
+    checkIds,
+    bl,
+    cl,
+    order,
+    tokDelta: r.cmp.promptTokens.pctChange,
+    metered: B.usage.metered && C.usage.metered,
+  };
+}
+
+export function headline(r: ReportInput): string {
+  const { C, tokDelta } = ctx(r);
+  return r.gate.pass
     ? `${esc(C.variant)} holds quality and uses <em>${esc(signedPct(tokDelta).replace("+", "")).replace("-", "")} ${tokDelta < 0 ? "fewer" : "more"}</em> prompt tokens.`
     : `${esc(C.variant)} <em class="amber">does not clear the gate</em> yet.`;
-  const metered = B.usage.metered && C.usage.metered;
-  const extraKeys = [
-    ...new Set(r.lines.flatMap((l) => Object.keys(l.extra ?? {}))),
-  ].slice(0, 6);
+}
 
-  const checkRows = cmp.checks
+export function lede(r: ReportInput): string {
+  const { order, checkIds, metered } = ctx(r);
+  return `${esc(r.meta.description)} <b>${order.length} cases</b>, two variants, ${checkIds.length} binary checks. ${metered ? "Tokens and cost are metered from the provider's usage report." : "Some usage figures are estimates; the method notes say which."}`;
+}
+
+export function verdictBand(r: ReportInput): string {
+  const { gate, meta } = r;
+  return `<div class="verdict ${gate.pass ? "" : "fail"}"><span class="dot"></span><div><b>Gate ${gate.pass ? "passed" : "failed"}.</b> <span>${gate.pass ? `Pass-all did not drop${meta.gate?.noRegressionOn?.length ? ` and ${esc(meta.gate.noRegressionOn.join(", "))} did not fall` : ""}.` : esc(gate.reasons.join("; "))}</span></div></div>
+${noiseBand(r)}`;
+}
+
+export function proofStrip(r: ReportInput): string {
+  const { B, C, tokDelta } = ctx(r);
+  const cmp = r.cmp;
+  return `<div class="proof">
+<div><div class="n">${pct(B.passAll.rate, 0)}<small>${esc(B.variant)}</small></div><div class="t">pass-all rate, baseline (${B.passAll.passed} of ${B.passAll.n})</div></div>
+<div><div class="n">${pct(C.passAll.rate, 0)}<small>${esc(C.variant)}</small></div><div class="t">pass-all rate, candidate (${C.passAll.passed} of ${C.passAll.n})</div></div>
+<div><div class="n ${tokDelta < 0 ? "up" : "down"}">${esc(signedPct(tokDelta))}</div><div class="t">prompt tokens per case, ${n0(cmp.promptTokens.baselineMean)} to ${n0(cmp.promptTokens.candidateMean)} (${esc(ci(cmp.promptTokens.ci, (x) => signedPct(x / Math.max(1, cmp.promptTokens.baselineMean))))} on the mean)</div></div>
+<div><div class="n ${cmp.costUsd.pctChange < 0 ? "up" : "down"}">${esc(signedPct(cmp.costUsd.pctChange))}</div><div class="t">cost per case, ${usd(cmp.costUsd.baselineMean)} to ${usd(cmp.costUsd.candidateMean)} (API-equivalent)</div></div>
+<div><div class="n">${esc(signedPct(cmp.latencyMs.pctChange))}</div><div class="t">latency per case, ${ms(cmp.latencyMs.baselineMean)} to ${ms(cmp.latencyMs.candidateMean)}</div></div>
+</div>`;
+}
+
+export function checksTable(r: ReportInput): string {
+  const { B, C } = ctx(r);
+  const rows = r.cmp.checks
     .map((c) => {
-      const d = meta.checks.find((x) => x.id === c.id)!;
+      const d = r.meta.checks.find((x) => x.id === c.id)!;
       return `<tr><td><b>${esc(c.id)}</b><br><span style="color:var(--ink2);font-size:13px">${esc(d.description)}</span></td><td><span class="tag ${d.kind === "judge" ? "amber" : ""}">${d.kind}</span></td><td class="num">${c.baseline.passed}/${c.baseline.n} <span style="color:var(--ink3)">${pct(c.baseline.rate)}</span></td><td class="num">${c.candidate.passed}/${c.candidate.n} <span style="color:var(--ink3)">${pct(c.candidate.rate)}</span></td><td class="num" style="color:${c.delta < 0 ? "var(--gate)" : "var(--ink)"}">${signedPct(c.delta)}</td><td class="num" style="color:var(--ink3)">${esc(ci(c.candidate.ci, (x) => pct(x, 0)))}</td><td>${c.saturated ? '<span class="tag green">saturated</span>' : ""}</td></tr>`;
     })
     .join("");
+  const cmp = r.cmp;
+  const regress = cmp.regressions.length
+    ? `<p class="notes"><b>${cmp.regressions.length} per-case regression${cmp.regressions.length === 1 ? "" : "s"}</b> (baseline passed, candidate failed): ${cmp.regressions
+        .slice(0, 12)
+        .map(
+          (x) =>
+            `<a href="#case-${esc(x.case_id)}" class="mono">${esc(x.case_id)}</a> ${esc(x.check)}`,
+        )
+        .join(
+          "; ",
+        )}${cmp.regressions.length > 12 ? "; and more in the ledger" : ""}. Read these first; a single run of a nondeterministic model also produces them on noise, so the gate is on rates.</p>`
+    : `<p class="notes">No per-case regression: every check the baseline passed, the candidate passed too.</p>`;
+  return `<table><thead><tr><th>check</th><th>kind</th><th class="num">${esc(B.variant)}</th><th class="num">${esc(C.variant)}</th><th class="num">delta</th><th class="num">95% interval (candidate)</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+<div style="margin-top:18px">${regress}</div>`;
+}
 
-  const caseRows = order
+export function checksSection(r: ReportInput): string {
+  return `<section><div class="sec-head"><h2 class="display">Checks</h2><p>Every check is pass or fail per case. Rates carry Wilson 95% intervals. A check both variants pass everywhere is saturated: it guards against regressions but no longer discriminates.</p></div>
+${checksTable(r)}</section>`;
+}
+
+export function tokensSection(r: ReportInput): string {
+  const { B, C, tokDelta } = ctx(r);
+  const cmp = r.cmp;
+  return `<section><div class="sec-head"><h2 class="display">Prompt tokens, paired</h2><p>One row per case. Grey is ${esc(B.variant)}; the colored dot is ${esc(C.variant)}. Mean change ${esc(signedPct(tokDelta))}, median change ${n0(cmp.promptTokens.medianDelta)} tokens, bootstrap 95% interval on the mean difference ${esc(ci(cmp.promptTokens.ci, n0))} tokens.</p></div>
+<div class="panel">${stripPlot(cmp)}</div></section>`;
+}
+
+/** The per-case table. caseHref turns the id into a link (the hub's case page); the static report anchors in place. */
+export function caseLedger(
+  r: ReportInput,
+  caseHref?: (id: string) => string,
+): string {
+  const { B, C, checkIds, bl, cl, order } = ctx(r);
+  const extraKeys = [
+    ...new Set(r.lines.flatMap((l) => Object.keys(l.extra ?? {}))),
+  ].slice(0, 6);
+  const rows = order
     .map((id) => {
       const b = bl.get(id)!,
         c = cl.get(id)!;
@@ -202,74 +278,78 @@ export function renderHtml(r: ReportInput): string {
                 Math.max(1, promptTokens(b.usage)),
             )
           : "";
-      return `<tr id="case-${esc(id)}"><td class="mono">${esc(id)}</td><td>${dots(b)}</td><td>${dots(c)}</td><td class="num">${pt(b)}</td><td class="num">${pt(c)}</td><td class="num" style="color:${delta.startsWith("-") ? "var(--live)" : "var(--ink2)"}">${delta}</td>${extra}</tr>`;
+      const label = caseHref
+        ? `<a href="${esc(caseHref(id))}">${esc(id)}</a>`
+        : esc(id);
+      return `<tr id="case-${esc(id)}" data-case="${esc(id)}"><td class="mono">${label}</td><td data-variant="${esc(B.variant)}">${dots(b)}</td><td data-variant="${esc(C.variant)}">${dots(c)}</td><td class="num">${pt(b)}</td><td class="num">${pt(c)}</td><td class="num" style="color:${delta.startsWith("-") ? "var(--live)" : "var(--ink2)"}">${delta}</td>${extra}</tr>`;
     })
     .join("");
+  return `<section><div class="sec-head"><h2 class="display">Per-case ledger</h2><p>Dots are checks in the order of the table above; hollow means the check did not apply. Tokens are prompt tokens the model read (fresh input plus cache read plus cache creation).</p></div>
+<table><thead><tr><th>case</th><th>${esc(B.variant)}</th><th>${esc(C.variant)}</th><th class="num">tokens ${esc(B.variant)}</th><th class="num">tokens ${esc(C.variant)}</th><th class="num">change</th>${extraKeys.map((k) => `<th class="num">${esc(k)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></section>`;
+}
 
-  const judgeTable = (j: NonNullable<ReportInput["judges"]>[number]) =>
-    `<h3 class="mono" style="margin:18px 0 6px">${esc(j.check)}</h3>
+export function judgeTable(
+  j: NonNullable<ReportInput["judges"]>[number],
+): string {
+  return `<h3 class="mono" style="margin:18px 0 6px">${esc(j.check)}</h3>
 <table><thead><tr><th>split</th><th class="num">n</th><th class="num">human fails</th><th class="num">human passes</th><th class="num">TPR</th><th class="num">TNR</th></tr></thead><tbody>${j.splits
-      .map(
-        (s) =>
-          `<tr><td class="mono">${esc(s.split)}</td><td class="num">${s.n}</td><td class="num">${s.humanFails}</td><td class="num">${s.humanPasses}</td><td class="num">${pct(s.tpr)} <span style="color:var(--ink3)">${esc(ci(s.tprCi, (x) => pct(x, 0)))}</span></td><td class="num">${pct(s.tnr)} <span style="color:var(--ink3)">${esc(ci(s.tnrCi, (x) => pct(x, 0)))}</span></td></tr>`,
-      )
-      .join(
-        "",
-      )}</tbody></table><p class="notes" style="margin-top:6px">${j.joined} labels matched a judge verdict; ${j.unmatched} did not.</p>`;
-  const judge = r.judges?.length
+    .map(
+      (s) =>
+        `<tr><td class="mono">${esc(s.split)}</td><td class="num">${s.n}</td><td class="num">${s.humanFails}</td><td class="num">${s.humanPasses}</td><td class="num">${pct(s.tpr)} <span style="color:var(--ink3)">${esc(ci(s.tprCi, (x) => pct(x, 0)))}</span></td><td class="num">${pct(s.tnr)} <span style="color:var(--ink3)">${esc(ci(s.tnrCi, (x) => pct(x, 0)))}</span></td></tr>`,
+    )
+    .join(
+      "",
+    )}</tbody></table><p class="notes" style="margin-top:6px">${j.joined} labels matched a judge verdict; ${j.unmatched} did not.</p>`;
+}
+
+export function judgeSection(r: ReportInput): string {
+  return r.judges?.length
     ? `<section><div class="sec-head"><h2 class="display">Judge validation</h2><p>Each judge check is a classifier. Its verdicts count only as far as they agree with a person's labels on a split it never saw. Positive means a failure is present. TPR is the share of human-labelled failures the judge caught; TNR the share of human-labelled passes it left alone. Two judges on the same property can be compared row for row.</p></div>${r.judges.map(judgeTable).join("")}</section>`
     : "";
+}
 
+export function transitionsSection(r: ReportInput): string {
+  const { B, C } = ctx(r);
   const transitions = [B.variant, C.variant]
     .map((v) => transitionTable(r.lines, v))
     .filter(Boolean)
     .join("");
-  const regress = cmp.regressions.length
-    ? `<p class="notes"><b>${cmp.regressions.length} per-case regression${cmp.regressions.length === 1 ? "" : "s"}</b> (baseline passed, candidate failed): ${cmp.regressions
-        .slice(0, 12)
-        .map(
-          (x) =>
-            `<a href="#case-${esc(x.case_id)}" class="mono">${esc(x.case_id)}</a> ${esc(x.check)}`,
-        )
-        .join(
-          "; ",
-        )}${cmp.regressions.length > 12 ? "; and more in the ledger" : ""}. Read these first; a single run of a nondeterministic model also produces them on noise, so the gate is on rates.</p>`
-    : `<p class="notes">No per-case regression: every check the baseline passed, the candidate passed too.</p>`;
+  return transitions
+    ? `<section><div class="sec-head"><h2 class="display">Where runs fail</h2><p>Rows are the last stage that succeeded, columns the first that failed. The matrix says where to look before any judge is built.</p></div>${transitions}</section>`
+    : "";
+}
 
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Weigh: ${esc(meta.suite)}</title>${FONTS}<style>${CSS}</style></head><body><div class="wrap">
-<div class="top"><div><span class="name">Weigh</span> <span class="meta">before/after eval harness</span></div><div class="meta mono">${esc(meta.suite)} · run ${esc(meta.run_id)} · ${esc((r.generatedAt ?? new Date().toISOString()).slice(0, 10))}</div></div>
-<h1 class="display">${title}</h1>
-<p class="lede">${esc(meta.description)} <b>${order.length} cases</b>, two variants, ${checkIds.length} binary checks. ${metered ? "Tokens and cost are metered from the provider's usage report." : "Some usage figures are estimates; the method notes say which."}</p>
-<div class="verdict ${gate.pass ? "" : "fail"}"><span class="dot"></span><div><b>Gate ${gate.pass ? "passed" : "failed"}.</b> <span>${gate.pass ? `Pass-all did not drop${meta.gate?.noRegressionOn?.length ? ` and ${esc(meta.gate.noRegressionOn.join(", "))} did not fall` : ""}.` : esc(gate.reasons.join("; "))}</span></div></div>
-${noiseBand(r)}<div class="proof">
-<div><div class="n">${pct(B.passAll.rate, 0)}<small>${esc(B.variant)}</small></div><div class="t">pass-all rate, baseline (${B.passAll.passed} of ${B.passAll.n})</div></div>
-<div><div class="n">${pct(C.passAll.rate, 0)}<small>${esc(C.variant)}</small></div><div class="t">pass-all rate, candidate (${C.passAll.passed} of ${C.passAll.n})</div></div>
-<div><div class="n ${tokDelta < 0 ? "up" : "down"}">${esc(signedPct(tokDelta))}</div><div class="t">prompt tokens per case, ${n0(cmp.promptTokens.baselineMean)} to ${n0(cmp.promptTokens.candidateMean)} (${esc(ci(cmp.promptTokens.ci, (x) => signedPct(x / Math.max(1, cmp.promptTokens.baselineMean))))} on the mean)</div></div>
-<div><div class="n ${cmp.costUsd.pctChange < 0 ? "up" : "down"}">${esc(signedPct(cmp.costUsd.pctChange))}</div><div class="t">cost per case, ${usd(cmp.costUsd.baselineMean)} to ${usd(cmp.costUsd.candidateMean)} (API-equivalent)</div></div>
-<div><div class="n">${esc(signedPct(cmp.latencyMs.pctChange))}</div><div class="t">latency per case, ${ms(cmp.latencyMs.baselineMean)} to ${ms(cmp.latencyMs.candidateMean)}</div></div>
-</div>
-
-<section><div class="sec-head"><h2 class="display">Checks</h2><p>Every check is pass or fail per case. Rates carry Wilson 95% intervals. A check both variants pass everywhere is saturated: it guards against regressions but no longer discriminates.</p></div>
-<table><thead><tr><th>check</th><th>kind</th><th class="num">${esc(B.variant)}</th><th class="num">${esc(C.variant)}</th><th class="num">delta</th><th class="num">95% interval (candidate)</th><th></th></tr></thead><tbody>${checkRows}</tbody></table>
-<div style="margin-top:18px">${regress}</div></section>
-
-<section><div class="sec-head"><h2 class="display">Prompt tokens, paired</h2><p>One row per case. Grey is ${esc(B.variant)}; the colored dot is ${esc(C.variant)}. Mean change ${esc(signedPct(tokDelta))}, median change ${n0(cmp.promptTokens.medianDelta)} tokens, bootstrap 95% interval on the mean difference ${esc(ci(cmp.promptTokens.ci, n0))} tokens.</p></div>
-<div class="panel">${stripPlot(cmp)}</div></section>
-
-<section><div class="sec-head"><h2 class="display">Per-case ledger</h2><p>Dots are checks in the order of the table above; hollow means the check did not apply. Tokens are prompt tokens the model read (fresh input plus cache read plus cache creation).</p></div>
-<table><thead><tr><th>case</th><th>${esc(B.variant)}</th><th>${esc(C.variant)}</th><th class="num">tokens ${esc(B.variant)}</th><th class="num">tokens ${esc(C.variant)}</th><th class="num">change</th>${extraKeys.map((k) => `<th class="num">${esc(k)}</th>`).join("")}</tr></thead><tbody>${caseRows}</tbody></table></section>
-
-${judge}
-${transitions ? `<section><div class="sec-head"><h2 class="display">Where runs fail</h2><p>Rows are the last stage that succeeded, columns the first that failed. The matrix says where to look before any judge is built.</p></div>${transitions}</section>` : ""}
-
-<section><div class="two"><div><h2 class="display">Method</h2></div><div class="notes">
+export function methodSection(r: ReportInput): string {
+  const { B, C, order, metered } = ctx(r);
+  const meta = r.meta;
+  return `<section><div class="two"><div><h2 class="display">Method</h2></div><div class="notes">
 <p><b>Variants.</b> ${meta.variants.map((v) => `<b>${esc(v.name)}</b>: ${esc(v.description)}`).join(" ")}</p>
 <p><b>Checks.</b> ${meta.checks.map((c) => `<b>${esc(c.id)}</b> (${c.kind}): ${esc(c.description)}`).join(" ")}</p>
 <p><b>Gate.</b> Candidate pass-all may not drop by more than ${pct(meta.gate?.maxPassAllDrop ?? 0, 0)}${meta.gate?.noRegressionOn?.length ? `, and the rate of ${esc(meta.gate.noRegressionOn.join(" and "))} may not be lower on the candidate` : ""}. Regressions per case are listed, not gated.</p>
 <p><b>Numbers.</b> ${metered ? "Token counts and cost come from the provider's usage report on every call (metered)." : "Where a provider reported usage the figures are metered; the rest are estimates and the ledger marks them."} Cost is the API-equivalent figure; these calls ran on a subscription. Latency is wall time per case including every call the variant made. Intervals: Wilson for rates, seeded percentile bootstrap (2,000 resamples) for paired means. No p-values.</p>
 <p><b>Pairing.</b> Only cases both variants completed are compared, in suite order, so every paired number has the same n (${order.length}). Errors: ${B.errors} on ${esc(B.variant)}, ${C.errors} on ${esc(C.variant)}.${meta.skipped.length ? ` Skipped cases: ${meta.skipped.map((s) => `${esc(s.id)} (${esc(s.reason)})`).join(", ")}.` : ""}</p>
 <p><b>Reproduce.</b></p><pre>${esc(meta.command)}\nbun src/cli.ts report ${esc(meta.suite)} ${esc(meta.run_id)}</pre>
-</div></div></section>
+</div></div></section>`;
+}
+
+export function renderHtml(r: ReportInput): string {
+  const { meta } = r;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Weigh: ${esc(meta.suite)}</title>${FONTS}<style>${CSS}</style></head><body><div class="wrap">
+<div class="top"><div><span class="name">Weigh</span> <span class="meta">before/after eval harness</span></div><div class="meta mono">${esc(meta.suite)} · run ${esc(meta.run_id)} · ${esc((r.generatedAt ?? new Date().toISOString()).slice(0, 10))}</div></div>
+<h1 class="display">${headline(r)}</h1>
+<p class="lede">${lede(r)}</p>
+${verdictBand(r)}${proofStrip(r)}
+
+${checksSection(r)}
+
+${tokensSection(r)}
+
+${caseLedger(r)}
+
+${judgeSection(r)}
+${transitionsSection(r)}
+
+${methodSection(r)}
 <footer>Weigh, by Kyle Bartlett. Traces for this run: runs/${esc(meta.suite)}/${esc(meta.run_id)}/traces.jsonl. Every number above maps to a line in that file.</footer>
 </div></body></html>`;
 }
