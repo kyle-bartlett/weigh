@@ -138,9 +138,37 @@ export async function startAgent(
         }
       }
 
-  // Claim and run, one at a time.
+  // Claim and run, one at a time. Every REREGISTER_EVERY empty polls the checkouts are refreshed and
+  // suites rediscovered, so a suite pushed to a repo shows up without restarting the agent.
+  const REREGISTER_EVERY = 20;
+  let idle = 0;
   for (;;) {
     let job: Job | undefined;
+    if (idle >= REREGISTER_EVERY) {
+      idle = 0;
+      const again: typeof registered = [];
+      for (const p of c.projects)
+        try {
+          const dir = ensureCheckout(c, p, log, { ...env, ...p.env });
+          again.push({
+            id: p.id,
+            suites: discoverSuites(dir, c.weigh_home, { ...env, ...p.env })
+              .suites,
+          });
+        } catch (e) {
+          log(
+            "warn",
+            `${p.id}: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`,
+          );
+        }
+      await hub
+        .register({
+          agent_id: c.agent_id,
+          version: AGENT_VERSION,
+          projects: again,
+        })
+        .catch(() => {});
+    }
     try {
       job = await hub.claim(c.agent_id, c.poll_wait_s);
     } catch (e) {
@@ -151,7 +179,9 @@ export async function startAgent(
       await Bun.sleep(5000);
       continue;
     }
+    if (!job) idle++;
     if (job) {
+      idle = 0;
       const p = c.projects.find((x) => x.id === job!.project_id);
       const jlog = agentLog(job.suite, job.run_id);
       if (!p) {
