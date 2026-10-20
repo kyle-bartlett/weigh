@@ -53,14 +53,12 @@ export const TOOLS: Tool[] = [
         description: p.description,
         public: p.public,
         suites: store.listSuites(p.id).map((s) => s.name),
-        latest_run: store
-          .listRuns({ project: p.id, limit: 1 })
-          .map((r) => ({
-            run: r.key,
-            status: r.status,
-            requested_at: r.requested_at,
-            gate_pass: r.summary?.pass,
-          }))[0],
+        latest_run: store.listRuns({ project: p.id, limit: 1 }).map((r) => ({
+          run: r.key,
+          status: r.status,
+          requested_at: r.requested_at,
+          gate_pass: r.summary?.pass,
+        }))[0],
       })),
   },
   {

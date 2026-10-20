@@ -451,6 +451,69 @@ export class Store {
         .all(key) as Raw[]
     ).map((r) => JSON.parse(r.record_json as string));
   }
+  upsertLabels(
+    run: Run,
+    rows: {
+      case_id: string;
+      variant: string;
+      human: "pass" | "fail";
+      note?: string;
+      split?: string;
+    }[],
+  ) {
+    const stmt = this.db.prepare(
+      `INSERT INTO labels (project_id, suite, run_key, case_id, variant, human, note, split, at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(run_key, case_id, variant) DO UPDATE SET human = excluded.human, note = excluded.note,
+         split = COALESCE(excluded.split, labels.split), at = excluded.at`,
+    );
+    this.db.transaction(() => {
+      for (const r of rows)
+        stmt.run(
+          run.project_id,
+          run.suite,
+          run.key,
+          r.case_id,
+          r.variant,
+          r.human,
+          r.note ?? "",
+          r.split ?? null,
+          now(),
+        );
+    })();
+  }
+  labels(
+    key: string,
+  ): {
+    case_id: string;
+    variant: string;
+    human: "pass" | "fail";
+    note: string;
+    split?: string;
+    at: string;
+  }[] {
+    return (
+      this.db
+        .query(
+          "SELECT case_id, variant, human, note, split, at FROM labels WHERE run_key = ? ORDER BY case_id, variant",
+        )
+        .all(key) as Raw[]
+    ).map((r) => ({
+      case_id: r.case_id as string,
+      variant: r.variant as string,
+      human: r.human as "pass" | "fail",
+      note: r.note as string,
+      split: (r.split as string) ?? undefined,
+      at: r.at as string,
+    }));
+  }
+  deleteLabel(key: string, caseId: string, variant: string) {
+    this.db.run(
+      "DELETE FROM labels WHERE run_key = ? AND case_id = ? AND variant = ?",
+      [key, caseId, variant],
+    );
+  }
+
   touchAgent(id: string, version: string, currentRunKey: string | null) {
     this.db.run(
       `INSERT INTO agents (id, last_seen_at, version, current_run_key) VALUES (?, ?, ?, ?)

@@ -30,6 +30,8 @@ import { runPage } from "./pages/run.ts";
 import { type Project, type Run, runKey, Store, TERMINAL } from "./store.ts";
 import { Streams } from "./stream.ts";
 import { handleMcp } from "./mcp.ts";
+import { type LabelRow, validate } from "../judge.ts";
+import { labelsPage } from "./pages/labels.ts";
 import { scopesOf } from "./auth.ts";
 
 /**
@@ -424,6 +426,93 @@ export function startHub(o: HubOptions) {
         throw new HttpError(400, "id must be a lowercase slug");
       const p = store.upsertProject({ ...scrub(b), id: b.id });
       return json(p, 201);
+    }),
+
+    // labels and judge validation
+    route("GET", "/r/:suite/:run/labels", (c) => {
+      const { project, run } = visibleRun(c);
+      if (!c.scopes.has("admin"))
+        throw new HttpError(
+          401,
+          "sign in with the admin token (/auth?token=...) to label",
+        );
+      const lines = store.traces(run.key);
+      return html(
+        labelsPage(
+          project,
+          run,
+          lines,
+          store.inputs(run.key),
+          store.labels(run.key),
+          { generatedAt: now() },
+        ),
+      );
+    }),
+    route("GET", "/api/runs/:suite/:run/labels", (c) => {
+      const { run } = visibleRun(c);
+      return json(store.labels(run.key));
+    }),
+    route("PUT", "/api/runs/:suite/:run/labels", async (c) => {
+      need(c, "admin");
+      const run = agentRun(c);
+      const b = (await readJson(c)) as { labels?: unknown[] };
+      const rows = (b.labels ?? []).filter(
+        (
+          r,
+        ): r is {
+          case_id: string;
+          variant: string;
+          human: "pass" | "fail";
+          note?: string;
+          split?: string;
+        } =>
+          !!r &&
+          typeof r === "object" &&
+          typeof (r as { case_id?: unknown }).case_id === "string" &&
+          typeof (r as { variant?: unknown }).variant === "string" &&
+          ((r as { human?: unknown }).human === "pass" ||
+            (r as { human?: unknown }).human === "fail"),
+      );
+      store.upsertLabels(run, scrub(rows));
+      return json({ stored: rows.length, total: store.labels(run.key).length });
+    }),
+    route("DELETE", "/api/runs/:suite/:run/labels/:case/:variant", (c) => {
+      need(c, "admin");
+      const run = agentRun(c);
+      store.deleteLabel(
+        run.key,
+        decodeURIComponent(c.params.case!),
+        decodeURIComponent(c.params.variant!),
+      );
+      return json({ ok: true });
+    }),
+    route("POST", "/api/runs/:suite/:run/judges/validate", async (c) => {
+      need(c, "admin");
+      const run = agentRun(c);
+      const b = (await readJson(c)) as { check?: string };
+      const check = b.check;
+      if (!check || !run.meta?.checks.some((x) => x.id === check))
+        throw new HttpError(400, "check must name a check of this run");
+      const labels = store.labels(run.key);
+      if (!labels.length) throw new HttpError(409, "no labels on this run");
+      const byKey = new Map(
+        store.traces(run.key).map((l) => [`${l.variant}\u0000${l.case_id}`, l]),
+      );
+      const result = validate(labels as unknown as LabelRow[], (r) => {
+        const v = byKey.get(
+          `${r.variant ?? run.meta!.candidate}\u0000${r.case_id}`,
+        )?.checks[check];
+        return v === undefined ? undefined : v ? "pass" : "fail";
+      });
+      const record = {
+        ...result,
+        check,
+        labels: `hub:${run.key} (${labels.length} labels)`,
+        at: now(),
+      };
+      store.putJudges(run.key, [record]);
+      ingestSummary(run.key);
+      return json(record);
     }),
 
     // MCP: JSON-RPC over POST, read scope by bearer or by path token

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HubClient, importRunDir } from "../src/agent/upload.ts";
@@ -156,6 +156,71 @@ describe("hub", () => {
       await get("/api/runs/exchange-triage/2026-10-19-prompts")
     ).json()) as { last_seq: number };
     expect(after.last_seq).toBe(ids.at(-1)!);
+  });
+
+  test("labels upsert on the hub and judge validation reproduces the committed numbers", async () => {
+    const rows = readFileSync(
+      join(import.meta.dir, "..", "suites", "exchange-triage.labels.jsonl"),
+      "utf8",
+    )
+      .split("\n")
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l));
+    const put = await fetch(
+      hub.url + "/api/runs/exchange-triage/2026-10-19-prompts/labels",
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${T.admin}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ labels: rows }),
+      },
+    );
+    expect(put.status).toBe(200);
+    expect(((await put.json()) as { total: number }).total).toBe(54);
+    const again = await fetch(
+      hub.url + "/api/runs/exchange-triage/2026-10-19-prompts/labels",
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${T.admin}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ labels: [{ ...rows[0], note: "changed" }] }),
+      },
+    );
+    expect(((await again.json()) as { total: number }).total).toBe(54);
+    const v = await fetch(
+      hub.url + "/api/runs/exchange-triage/2026-10-19-prompts/judges/validate",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${T.admin}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ check: "attribution_jev" }),
+      },
+    );
+    expect(v.status).toBe(200);
+    const rec = (await v.json()) as {
+      joined: number;
+      splits: { split: string; tpr: number; tnr: number; n: number }[];
+    };
+    const all = rec.splits.find((s) => s.split === "all")!;
+    expect(rec.joined).toBe(54);
+    expect(all.n).toBe(54);
+    expect(all.tpr).toBeCloseTo(0.5);
+    expect(all.tnr).toBeCloseTo(1);
+    expect(
+      (await get("/r/exchange-triage/2026-10-19-prompts/labels", T.read))
+        .status,
+    ).toBe(401);
+    const page = await (
+      await get("/r/exchange-triage/2026-10-19-prompts/labels", T.admin)
+    ).text();
+    expect(page).toContain("labels-data");
+    expect(page).toContain("/web/labels.js");
   });
 
   test("agent endpoints refuse the read token and public pages reject unknown routes", async () => {
