@@ -4,3 +4,4 @@ runs/*
 data/
 .DS_Store
 .procoder/
+.claude/handoff.md
