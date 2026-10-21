@@ -1,5 +1,5 @@
 import { esc } from "../../report/html.ts";
-import { buildFrom } from "../../report/build.ts";
+import { buildFrom, type JudgeRecord } from "../../report/build.ts";
 import { pct, signedPct } from "../../stats.ts";
 import type { Project, Run, Store, SuiteRow } from "../store.ts";
 import { page, statusTag, when } from "./layout.ts";
@@ -14,12 +14,13 @@ export function homePage(
     .listProjects()
     .filter((p) => p.public || opts.includePrivate);
   const latest = store.latestFinishedRun(projects.map((p) => p.id));
-  const built = latest?.meta
-    ? buildFrom(latest.meta, store.traces(latest.key), store.judges(latest.key))
-    : undefined;
+  const judges = latest ? store.judges(latest.key) : [];
+  const built = latest ? safeBuild(store, latest, judges) : undefined;
   const href = latest
     ? `/r/${encodeURIComponent(latest.suite)}/${encodeURIComponent(latest.run_id)}`
     : undefined;
+  // The graders were validated against the labels each judge record joined, not the hub's table.
+  const checked = Math.max(0, ...judges.map((j) => j.joined));
   const labels = latest ? store.labelCount(latest.key) : 0;
   const finishedAt = latest?.finished_at ?? latest?.meta?.finished_at;
   const cards = projects
@@ -43,16 +44,32 @@ ${latest ? `<article class="card latest-verdict" data-section="latest-verdict"><
 </ol></section>
 <section><div class="sec-head"><h2 class="display">Why it matters</h2><p>An AI that reads emails and makes decisions will be wrong sometimes. The question is whether you find out first. This is how.</p></div></section>
 <div class="trust-strip" aria-label="Run evidence">
-${latest ? `<span>${finishedAt ? `Last run <time class="mono" datetime="${esc(finishedAt)}">${when(finishedAt)} UTC</time>` : "Finish date not recorded."}</span><span>${built ? `${built.cmp.candidate.n} cases` : "Case count not available."}</span><span>${labels && built?.judges.length ? `graders checked against ${labels} human labels` : labels ? `${labels} human labels recorded; graders not checked yet.` : "No human labels recorded for this run."}</span>` : ""}
+${latest ? `<span>${finishedAt ? `Last run <time class="mono" datetime="${esc(finishedAt)}">${when(finishedAt)} UTC</time>` : "Finish date not recorded."}</span><span>${built && built.cmp.candidate.n > 0 ? `${built.cmp.candidate.n} cases` : "Case count not available."}</span><span>${checked ? `graders checked against ${checked} human labels` : labels ? `${labels} human labels recorded; graders not checked yet.` : "No human labels recorded for this run."}</span>` : ""}
 <a href="https://github.com/kyle-bartlett/weigh">Public code</a></div>
 <div class="landing-actions">${href ? `<a class="btn primary" href="${esc(href)}">Watch a run</a>` : '<button class="btn primary" type="button" disabled aria-disabled="true">Watch a run</button>'}<a class="btn" href="mailto:kyle@bartlettlabs.io">Talk to Kyle</a></div>
-<section id="projects"><div class="sec-head"><h2 class="display">For engineers</h2><p>Open a project for its suites, runs and every case behind the verdict.</p></div>${cards ? `<div class="cards">${cards}</div>` : '<p class="empty">Nothing public yet.</p>'}</section>
+<section id="projects"><div class="sec-head"><h2 class="display">Projects</h2><p>Open a project for its suites, runs and every case behind the verdict.</p></div>${cards ? `<div class="cards">${cards}</div>` : '<p class="empty">Nothing public yet.</p>'}</section>
 </main>`;
   return page({ title: "Weigh", body, generatedAt: opts.generatedAt });
 }
 
 const landingText = (text: string) =>
-  esc(text.replace(/[\u2013\u2014]/g, ", ").replace(/(\d)\+/g, "$1 or more"));
+  esc(
+    text
+      .replace(/\s*[\u2013\u2014]\s*/g, ", ")
+      .replace(/(\d)\+(?!\w)/g, "$1 or more"),
+  );
+
+/** Same no-traces rule as the run page. A malformed stored meta must not take down `/`. */
+function safeBuild(store: Store, run: Run, judges: JudgeRecord[]) {
+  if (!run.meta) return undefined;
+  const lines = store.traces(run.key);
+  if (!lines.length) return undefined;
+  try {
+    return buildFrom(run.meta, lines, judges);
+  } catch {
+    return undefined;
+  }
+}
 
 export function projectPage(
   project: Project,

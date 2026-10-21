@@ -110,26 +110,45 @@ describe("hub pages", () => {
     }
   });
 
-  test("landing trust counts stored labels for the featured run, including edits", () => {
+  test("landing trust reports the labels the graders were checked against, else the hub's labels", () => {
     const store = landingStore();
     try {
-      const labels = b.meta.case_order
-        .slice(0, 3)
-        .map((case_id) => ({
-          case_id,
-          variant: b.meta.candidate,
-          human: "pass" as const,
-        }));
-      store.upsertLabels(run, labels);
-      store.upsertLabels(run, [{ ...labels[0]!, human: "fail" }]);
+      const joined = Math.max(...b.judges.map((j) => j.joined));
       let html = homePage(store);
-      expect(html).toContain("graders checked against 3 human labels");
+      // Judges carry their own validation count; the hub's labels table is empty here.
+      expect(html).toContain(`graders checked against ${joined} human labels`);
       expect(html).toContain("27 cases");
       expect(html).toContain(`datetime="${run.finished_at}"`);
       expect(html).toContain('href="https://github.com/kyle-bartlett/weigh"');
+      const labels = b.meta.case_order.slice(0, 3).map((case_id) => ({
+        case_id,
+        variant: b.meta.candidate,
+        human: "pass" as const,
+      }));
+      store.upsertLabels(run, labels);
+      store.upsertLabels(run, [{ ...labels[0]!, human: "fail" }]);
+      html = homePage(store);
+      expect(html).toContain(`graders checked against ${joined} human labels`);
+      expect(html).not.toContain("3 human labels");
+      store.db.run("DELETE FROM judges WHERE run_key = ?", [run.key]);
+      html = homePage(store);
+      expect(html).toContain(
+        "3 human labels recorded; graders not checked yet.",
+      );
       store.deleteLabel(run.key, labels[0]!.case_id, labels[0]!.variant);
       html = homePage(store);
-      expect(html).toContain("graders checked against 2 human labels");
+      expect(html).toContain(
+        "2 human labels recorded; graders not checked yet.",
+      );
+      store.db.run("DELETE FROM labels WHERE run_key = ?", [run.key]);
+      expect(homePage(store)).toContain(
+        "No human labels recorded for this run.",
+      );
+      store.db.run("DELETE FROM trace_lines WHERE run_key = ?", [run.key]);
+      html = homePage(store);
+      expect(html).toContain("This comparison has no graded cases.");
+      expect(html).toContain("Case count not available.");
+      expect(html).not.toContain("0 cases");
       expect(html).not.toMatch(DASH);
     } finally {
       store.db.close();
