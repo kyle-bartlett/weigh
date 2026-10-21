@@ -177,20 +177,32 @@ export async function startAgent(
   // suites rediscovered, so a suite pushed to a repo shows up without restarting the agent.
   const REREGISTER_EVERY = 20;
   let idle = 0;
+  // A stuck registration backs off: discovery fetches every remote, so after the first retry the
+  // next attempts wait 1, 3, 7, then 11 loops (each loop is a poll or a retry delay).
+  let registerFails = 0;
+  let registerWait = 0;
   for (;;) {
     let job: Job | undefined;
-    if (needRegister || idle >= REREGISTER_EVERY) {
+    if (needRegister && registerWait > 0) {
+      registerWait--;
+    } else if (needRegister || idle >= REREGISTER_EVERY) {
       needRegister = true;
+      let ok = false;
       try {
-        if (await registerProjects(discoverProjects())) {
-          needRegister = false;
-          idle = 0;
-        }
+        ok = await registerProjects(discoverProjects());
       } catch (e) {
         log(
           "warn",
           `register: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`,
         );
+      }
+      if (ok) {
+        needRegister = false;
+        idle = 0;
+        registerFails = 0;
+      } else {
+        registerFails++;
+        registerWait = Math.min(2 ** (registerFails - 1) - 1, 11);
       }
     }
     try {
