@@ -148,16 +148,21 @@ test("run shares use proxy origin and only comparison parameters; live fragments
     );
     expect(labels).not.toContain("/web/tour.js");
     expect(labels).not.toContain("data-copy-summary");
-    const invalid = await (
-      await fetch(`${hub.url}${path}?baseline=discard-me`, {
-        headers: {
-          host: "reader@preview.example",
-          "x-forwarded-proto": "https, http",
-        },
-      })
-    ).text();
+    const invalidRes = await fetch(`${hub.url}${path}?baseline=discard-me`, {
+      headers: {
+        host: "reader@preview.example",
+        "x-forwarded-proto": "https, http",
+      },
+    });
+    expect(invalidRes.status).toBe(200);
+    const invalid = await invalidRes.text();
     expect(invalid).not.toContain("discard-me");
     expect(invalid).not.toContain("reader@");
+    const badPort = await fetch(`${hub.url}${path}`, {
+      headers: { host: "x.com:99999" },
+    });
+    expect(badPort.status).toBe(200);
+    expect(await badPort.text()).not.toContain("x.com:99999");
   } finally {
     hub.stop();
   }
@@ -172,7 +177,9 @@ test("copy summary is exactly three plain lines with the absolute link last", ()
     expect(lines[0]).toBe(
       "The new prompt v3 beat the current prompt v2: 6 more cases passed every check.",
     );
-    expect(lines[1]).toMatch(/^\d+ cases? fixed[.;].*\d+ cases? broke/);
+    expect(lines[1]).toMatch(
+      /^\d+ cases? gained a passing check; \d+ cases? lost one/,
+    );
     expect(lines[2]).toBe(link);
     expect(lines.join("\n")).not.toMatch(
       /<[^>]*>|&(?:amp|lt|gt|quot);|[\u2013\u2014]|\d\+/,

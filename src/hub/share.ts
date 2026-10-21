@@ -36,7 +36,7 @@ export function copySummary(
 }
 
 /** No public-origin setting exists. Only accept a host and an HTTP scheme from the proxy. */
-export function publicOrigin(req: Request): string {
+export function publicOrigin(req: Request, url: URL): string {
   const proto =
     req.headers
       .get("x-forwarded-proto")
@@ -45,16 +45,17 @@ export function publicOrigin(req: Request): string {
       .toLowerCase() === "https"
       ? "https"
       : "http";
-  const host = req.headers.get("host") ?? new URL(req.url).host;
+  const host = req.headers.get("host") ?? url.host;
   if (!/[\s/@?#\\]/.test(host)) {
     try {
-      const url = new URL(`${proto}://${host}`);
-      if (url.hostname && !url.username && !url.password) return url.origin;
+      const parsed = new URL(`${proto}://${host}`);
+      if (parsed.hostname && !parsed.username && !parsed.password)
+        return parsed.origin;
     } catch {
-      /* Fall back to the request URL's host, never its query or credentials. */
+      /* Fall back to the parsed request URL, which always has a host. */
     }
   }
-  return `${proto}://${new URL(req.url).host}`;
+  return `${proto}://${url.host}`;
 }
 
 export function shareUrls(run: Run, built: Built | undefined, origin: string) {

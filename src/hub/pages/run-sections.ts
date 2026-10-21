@@ -253,7 +253,7 @@ function changedGroups(b: Built) {
 
 export function changedSentence(b: Built): string {
   const { fixed, broken } = changedGroups(b);
-  return `${fixed.length} ${fixed.length === 1 ? "case" : "cases"} fixed; ${broken.length} ${broken.length === 1 ? "case" : "cases"} broke compared with the current prompt.`;
+  return `${fixed.length} ${fixed.length === 1 ? "case" : "cases"} gained a passing check; ${broken.length} ${broken.length === 1 ? "case" : "cases"} lost one, compared with the current prompt.`;
 }
 
 export function changedCases(b: Built, base: string): string {

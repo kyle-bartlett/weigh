@@ -289,7 +289,7 @@ export function startHub(o: HubOptions) {
         runPage(project, run, built(run, pick), {
           pick,
           generatedAt: now(),
-          origin: publicOrigin(c.req),
+          origin: publicOrigin(c.req, c.url),
         }),
       );
     }),
@@ -297,27 +297,23 @@ export function startHub(o: HubOptions) {
       // Check visibility before looking in the cache, including after a project becomes private.
       const { run } = visibleRun(c);
       const pick = sharePick(run, c.url);
-      const key = JSON.stringify([run.key, run.last_seq]);
+      const key = JSON.stringify([run.key, run.last_seq, run.status]);
       const comparison = JSON.stringify([
         pick.baseline ?? run.meta?.baseline,
         pick.candidate ?? run.meta?.candidate,
       ]);
-      let png =
-        run.status === "finished"
-          ? images.get(key)?.get(comparison)
-          : undefined;
+      // Keyed on status as well: updateRun can change status without inserting an event.
+      let png = images.get(key)?.get(comparison);
       if (!png) {
         png = renderVerdictPng(verdictSummary(run, built(run, pick)));
-        if (run.status === "finished") {
-          if (!images.has(key)) {
-            if (images.size >= 32) images.delete(images.keys().next().value!);
-            images.set(key, new Map());
-          }
-          const comparisons = images.get(key)!;
-          if (comparisons.size >= 8)
-            comparisons.delete(comparisons.keys().next().value!);
-          comparisons.set(comparison, png);
+        if (!images.has(key)) {
+          if (images.size >= 32) images.delete(images.keys().next().value!);
+          images.set(key, new Map());
         }
+        const comparisons = images.get(key)!;
+        if (comparisons.size >= 8)
+          comparisons.delete(comparisons.keys().next().value!);
+        comparisons.set(comparison, png);
       }
       return new Response(Buffer.from(png), {
         headers: {
@@ -335,7 +331,7 @@ export function startHub(o: HubOptions) {
         share: shareControls(
           run,
           b,
-          shareUrls(run, b, publicOrigin(c.req)).link,
+          shareUrls(run, b, publicOrigin(c.req, c.url)).link,
         ),
         status: run.status,
         finished: run.finished,
@@ -930,7 +926,7 @@ export function startHub(o: HubOptions) {
     development: false,
     idleTimeout: 255,
     fetch: async (req, srv) => {
-      const url = new URL(req.url, `http://${srv.hostname}:${srv.port}`);
+      const url = requestUrl(req.url, `http://${srv.hostname}:${srv.port}`);
       const ip =
         req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
         srv.requestIP(req)?.address ||
@@ -971,6 +967,16 @@ export function startHub(o: HubOptions) {
       store.db.close();
     },
   };
+}
+
+/** A malformed Host header makes Bun hand over an unparsable absolute URL. Keep the path, drop the host. */
+function requestUrl(raw: string, base: string): URL {
+  try {
+    return new URL(raw, base);
+  } catch {
+    const path = raw.replace(/^[a-z][a-z0-9+.-]*:\/\/[^\/]*/i, "");
+    return new URL(path.startsWith("/") ? path : `/${path}`, base);
+  }
 }
 
 function errorPage(status: number, message: string) {

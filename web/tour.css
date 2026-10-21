@@ -70,6 +70,10 @@
 .tour-actions .btn {
   min-height: 44px;
 }
+.tour-actions .btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .tour-actions [data-back] {
   margin-right: auto;
 }
