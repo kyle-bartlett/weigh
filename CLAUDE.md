@@ -31,7 +31,7 @@ Use these words the way Weigh uses them, in replies as much as in code.
 Changes must not break these without the decider's sign-off.
 
 1. Model calls go through `~/.claude/PAI/TOOLS/Inference.ts`. Never import `@anthropic-ai/sdk`, never run `claude` directly.
-2. bun only, one lockfile (`bun.lock`), one runtime dependency (zod).
+2. bun only, one lockfile (`bun.lock`), two runtime dependencies: zod, and `@resvg/resvg-js` for the share image (the one exception the v5 spec allows, added in #4). Nothing else without the decider's sign-off.
 3. Every report number maps to a trace line, and cached outputs are never re-spent. `rescore` must stay free.
 4. Checks are binary. No Likert scales, no generic vendor metrics. A judge gates nothing until validated against human labels on a locked test split.
 5. Tokens never appear in code, logs, chat, docs or the vault. The read-token connector URL stays private.
