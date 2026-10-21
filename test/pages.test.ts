@@ -8,6 +8,7 @@ import { Store, type Project, type Run } from "../src/hub/store.ts";
 import { openDb } from "../src/hub/db.ts";
 import { build, buildFrom } from "../src/report/build.ts";
 import { runFragments } from "../src/hub/pages/run-sections.ts";
+import type { VariantOutput } from "../src/types.ts";
 
 const example = join(
   import.meta.dir,
@@ -66,6 +67,182 @@ describe("hub pages", () => {
     store.putJudges(run.key, b.judges);
     return store;
   }
+
+  test("case compares stored fields and decisions, preserving every record in the drawer", () => {
+    const lines = b.lines.filter((l) => l.case_id === "GOLD-01");
+    const outputs = new Map<
+      string,
+      { output: VariantOutput; truncated: boolean }
+    >();
+    for (const line of lines)
+      outputs.set(line.variant, {
+        output: {
+          output: {
+            fields: [
+              {
+                field: "construction",
+                expected: "Joisted Masonry",
+                got:
+                  line.variant === b.meta.baseline
+                    ? "Frame"
+                    : "Joisted Masonry",
+                correct: true,
+              },
+            ],
+            decision:
+              line.variant === b.meta.baseline ? "INCOMPLETE" : "IN APPETITE",
+            expectedDecision: "IN APPETITE",
+            decisionCorrect: true,
+          },
+          usage: line.usage,
+        },
+        truncated: true,
+      });
+    const html = casePage(
+      project,
+      run,
+      "GOLD-01",
+      "BROKER EMAIL: hello",
+      lines,
+      outputs,
+    );
+    const [product, engineers] = html.split('<details id="engineers">');
+    expect(product).toContain("What the broker wrote");
+    expect(product).toContain("BROKER EMAIL: hello");
+    expect(product).toContain("What each version answered");
+    expect(product).toContain("Expected");
+    expect(product).toContain("Current prompt");
+    expect(product).toContain("New prompt");
+    expect(product).toContain('class="table-scroll"');
+    expect(product).toContain('data-different="true"');
+    expect(product).toContain(
+      '<td class="field-difference">Frame, differs from the expert</td>',
+    );
+    expect(product).toContain("Joisted Masonry, matches the expert");
+    expect(product).toContain("follow up with the broker");
+    expect(product).toContain("quote it");
+    expect(product).toContain('class="tag"');
+    expect(product).not.toContain("prompt tokens</dt>");
+    expect(product).not.toContain("&quot;fields&quot;");
+    expect(engineers).toContain("For engineers</summary>");
+    for (const line of lines)
+      expect(engineers).toContain(`<h3 class="mono">${line.variant}</h3>`);
+    for (const text of [
+      "prompt tokens",
+      "output tokens",
+      "latency",
+      "cost",
+      "at</dt>",
+      "Trace line",
+      "&quot;fields&quot;",
+      "Output truncated",
+      "decision_correct",
+    ])
+      expect(engineers).toContain(text);
+    expect(html).toContain("/web/run.js");
+    expect(html).toContain('data-live="false"');
+    expect(html).not.toMatch(DASH);
+  });
+
+  test("case handles nulls, missing fields, invalid outputs and conflicting expert answers", () => {
+    const lines = b.lines.filter((l) => l.case_id === "GOLD-01");
+    const stored = (output: unknown) => ({
+      output: { output, usage: lines[0]!.usage },
+      truncated: false,
+    });
+    const outputs = new Map([
+      [
+        b.meta.baseline,
+        stored({
+          fields: [
+            { field: "nullable", expected: null, got: null, correct: false },
+            { field: "missing", expected: 0, got: 0, correct: true },
+            { field: "conflict", expected: "A", got: "A", correct: true },
+            { field: "<script>", expected: "<b>", got: "<b>", correct: true },
+          ],
+        }),
+      ],
+      [
+        b.meta.candidate,
+        stored({
+          fields: [
+            {
+              field: "nullable",
+              expected: null,
+              got: "invented",
+              correct: true,
+            },
+            { field: "conflict", expected: "B", got: "B", correct: true },
+          ],
+          decision: "REFERRED",
+          expectedDecision: "REFERRED",
+        }),
+      ],
+      ["untraced", stored("extra raw record")],
+    ]);
+    const html = casePage(project, run, "GOLD-01", undefined, lines, outputs);
+    const [product, engineers] = html.split('<details id="engineers">');
+    expect(product).toContain("Not provided, matches the expert");
+    expect(product).toContain("invented, differs from the expert");
+    expect(product).toContain("0, matches the expert");
+    expect(product).toContain("No stored answer for this field.");
+    expect(product).toContain("Stored expert answers differ.");
+    expect(product).toContain("send to an underwriter");
+    expect(product).toContain("&lt;script&gt;");
+    expect(product).not.toContain("<b>, matches");
+    expect(engineers).toContain("extra raw record");
+    for (const malformed of [
+      "plain answer",
+      null,
+      4,
+      {},
+      { fields: null },
+      { fields: [null, "bad", { field: "bad", expected: {}, got: [] }] },
+    ]) {
+      const fallback = casePage(
+        project,
+        run,
+        "GOLD-01",
+        undefined,
+        lines,
+        new Map([[b.meta.baseline, stored(malformed)]]),
+      );
+      expect(fallback).toContain("Some field answers aren't available");
+      expect(fallback.split('<details id="engineers">')[1]).toContain(
+        "Full output record (JSON)",
+      );
+      expect(fallback).not.toContain("undefined, matches the expert");
+    }
+  });
+
+  test("landing normalizes offset timestamps and version punctuation", () => {
+    const store = landingStore();
+    try {
+      store.updateRun(run.key, { finished_at: "2026-10-20T01:30:00+03:00" });
+      expect(homePage(store).includes(">2026-10-19 22:30 UTC</time>")).toBe(
+        true,
+      );
+      const candidate = "new\u2013prompt 300+";
+      store.updateRun(run.key, {
+        meta: {
+          ...b.meta,
+          candidate,
+          variants: b.meta.variants.map((v) =>
+            v.name === b.meta.candidate ? { ...v, name: candidate } : v,
+          ),
+        },
+      });
+      for (const line of b.lines.filter((l) => l.variant === b.meta.candidate))
+        store.upsertTrace(run.key, { ...line, variant: candidate });
+      const html = homePage(store);
+      expect(html).not.toMatch(DASH);
+      expect(html.replace(/<[^>]*>/g, "")).not.toMatch(/\d\+/);
+      expect(html).toContain("new, prompt 300 or more");
+      expect(html).toContain('class="tag"');
+    } finally {
+      store.db.close();
+    }
+  });
 
   test("landing renders the approved copy, shared verdict story, steps and buttons", () => {
     const store = landingStore();

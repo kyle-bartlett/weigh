@@ -56,6 +56,10 @@ input.txt{font:inherit;font-size:14px;padding:7px 10px;border:1px solid var(--li
 .run-page summary{cursor:pointer}.run-page summary:focus-visible,.run-page .tag:focus-visible{outline:2px solid var(--live);outline-offset:3px}
 #engineers{border-top:1px solid var(--line);margin:20px 0}#engineers>summary{font-size:24px;padding:24px 0;font-weight:600}
 .table-scroll{overflow-x:auto;max-width:100%}.table-scroll table{min-width:650px}.run-page pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.case-page{overflow-wrap:anywhere}.case-page .tag{text-transform:none;letter-spacing:0}
+@media(max-width:600px){.case-page .sec-head{grid-template-columns:1fr;gap:12px}}
+.field-table .field-difference{background:var(--gate-soft)}
+.case-records{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:24px}.case-records>div{min-width:0}.case-page .kv{grid-template-columns:minmax(0,max-content) minmax(0,1fr)}.case-page summary{cursor:pointer}
 .run-page .tag{text-transform:none;letter-spacing:0}.run-page h1 .tag{font-size:.4em}
 @media(prefers-reduced-motion:reduce){.status.running i,tr.live-new td{animation:none}.progress i{transition:none}}
 @media(max-width:600px){.check-row{grid-template-columns:1fr;gap:0}.check-counts{display:block}.case-table thead{display:none}.case-table,.case-table tbody,.case-table tr,.case-table td{display:block;width:100%}.case-table tr{border-top:1px solid var(--line);padding:12px 0}.case-table td{border:0;padding:5px 0}.case-table td[data-label]::before{content:attr(data-label);display:block;font-size:12px;color:var(--ink3);font-weight:400}.run-page .sec-head{gap:12px}}

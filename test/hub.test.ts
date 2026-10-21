@@ -40,6 +40,13 @@ describe("hub", () => {
     expect(r.outputs).toBe(0);
     expect(r.judges).toBe(2);
 
+    expect(await (await get("/")).text()).not.toContain(
+      'href="/p/exchange-triage"',
+    );
+    expect(await (await get("/", T.read)).text()).toContain(
+      'href="/p/exchange-triage"',
+    );
+
     // Private until an admin flips it.
     expect((await get("/r/exchange-triage/2026-10-19-prompts")).status).toBe(
       404,
@@ -112,7 +119,20 @@ describe("hub", () => {
       "GOLD-01",
       "abc",
       JSON.stringify({
-        output: { decision: "IN APPETITE", note: "archived output text" },
+        output: {
+          fields: [
+            {
+              field: "construction",
+              expected: "Joisted Masonry",
+              got: "Joisted Masonry",
+              correct: true,
+            },
+          ],
+          decision: "IN APPETITE",
+          expectedDecision: "IN APPETITE",
+          decisionCorrect: true,
+          note: "archived output text",
+        },
         usage: {},
       }),
     );
@@ -120,6 +140,9 @@ describe("hub", () => {
       await get("/r/exchange-triage/2026-10-19-prompts/c/GOLD-01")
     ).text();
     expect(withOutput).toContain("archived output text");
+    expect(withOutput.split('<details id="engineers">')[0]).toContain(
+      "Joisted Masonry, matches the expert",
+    );
     expect(casePage).toContain("Maple Row Apartments");
     expect(
       (await get("/r/exchange-triage/2026-10-19-prompts/report.html")).status,

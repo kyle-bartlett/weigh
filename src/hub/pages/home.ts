@@ -23,6 +23,9 @@ export function homePage(
   const checked = Math.max(0, ...judges.map((j) => j.joined));
   const labels = latest ? store.labelCount(latest.key) : 0;
   const finishedAt = latest?.finished_at ?? latest?.meta?.finished_at;
+  const finishedUtc = finishedAt
+    ? new Date(finishedAt).toISOString()
+    : undefined;
   const cards = projects
     .map((project) => {
       const suites = store.listSuites(project.id);
@@ -44,7 +47,7 @@ ${latest ? `<article class="card latest-verdict" data-section="latest-verdict"><
 </ol></section>
 <section><div class="sec-head"><h2 class="display">Why it matters</h2><p>An AI that reads emails and makes decisions will be wrong sometimes. The question is whether you find out first. This is how.</p></div></section>
 <div class="trust-strip" aria-label="Run evidence">
-${latest ? `<span>${finishedAt ? `Last run <time class="mono" datetime="${esc(finishedAt)}">${when(finishedAt)} UTC</time>` : "Finish date not recorded."}</span><span>${built && built.cmp.candidate.n > 0 ? `${built.cmp.candidate.n} cases` : "Case count not available."}</span><span>${checked ? `graders checked against ${checked} human labels` : labels ? `${labels} human labels recorded; graders not checked yet.` : "No human labels recorded for this run."}</span>` : ""}
+${latest ? `<span>${finishedAt ? `Last run <time class="mono" datetime="${esc(finishedAt)}">${when(finishedUtc)} UTC</time>` : "Finish date not recorded."}</span><span>${built && built.cmp.candidate.n > 0 ? `${built.cmp.candidate.n} cases` : "Case count not available."}</span><span>${checked ? `graders checked against ${checked} human labels` : labels ? `${labels} human labels recorded; graders not checked yet.` : "No human labels recorded for this run."}</span>` : ""}
 <a href="https://github.com/kyle-bartlett/weigh">Public code</a></div>
 <div class="landing-actions">${href ? `<a class="btn primary" href="${esc(href)}">Watch a run</a>` : '<button class="btn primary" type="button" disabled aria-disabled="true">Watch a run</button>'}<a class="btn" href="mailto:kyle@bartlettlabs.io">Talk to Kyle</a></div>
 <section id="projects"><div class="sec-head"><h2 class="display">Projects</h2><p>Open a project for its suites, runs and every case behind the verdict.</p></div>${cards ? `<div class="cards">${cards}</div>` : '<p class="empty">Nothing public yet.</p>'}</section>

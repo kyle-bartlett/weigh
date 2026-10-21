@@ -9,7 +9,7 @@ import type { Run } from "../store.ts";
 export const tag = (name: string, meaning: string) =>
   `<span class="tag" tabindex="0" title="${esc(meaning)}">${esc(name)}</span>`;
 export const version = (name: string, role: string) =>
-  `${role} ${tag(name, `The ${role}'s version name`)}`;
+  `${role} ${tag(name.replace(/\s*[\u2013\u2014]\s*/g, ", ").replace(/(\d)\+(?!\w)/g, "$1 or more"), `The ${role}'s version name`)}`;
 const number = (n: number, digits = 0) =>
   Number.isFinite(n)
     ? n.toLocaleString("en-US", {
@@ -275,7 +275,10 @@ function caseStatus(l: TraceLine | undefined, b: Built): string {
   return "Passed everything";
 }
 function productDecision(l?: TraceLine): string {
-  const value = l?.extra?.decision;
+  return productDecisionValue(l?.extra?.decision);
+}
+
+export function productDecisionValue(value: unknown): string {
   if (value == null) return "";
   const words: Record<string, string> = {
     INCOMPLETE: "follow up with the broker",
