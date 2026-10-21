@@ -505,6 +505,33 @@ const checks: Check[] = [
 
 const suite: Suite = {
   name: "exchange-triage",
+  // v1/v2 counts: construction_canonical=false in the committed example traces.
+  // v3 incident: prompt history above. v4 follow-ups: approved v5 design, Project page.
+  timeline: [
+    {
+      version: "v1",
+      headline: "The plain prompt repeated the broker's construction wording.",
+      number: "4 nonstandard construction answers",
+    },
+    {
+      version: "v2",
+      headline:
+        "Canonical construction classes gave the rules the names they expect.",
+      number: "0 nonstandard construction answers",
+    },
+    {
+      version: "v3",
+      headline:
+        "An invented value caught in production led to stricter source checks.",
+      number: "1 invented value caught",
+    },
+    {
+      version: "v4",
+      headline:
+        "Bare-masonry submissions stopped triggering unnecessary follow-ups.",
+      number: "4 follow-ups fixed",
+    },
+  ],
   description:
     `Exchange Triage extraction prompts v1, v2 and v3 over the 27-case golden set, through the production pipeline (intake, extraction, grounding, appetite; writer off) on claude ${MODEL} via the CLI. ` +
     "Baseline v2 (what shipped 2026-07-27), candidate v3 (production), v2-repeat as the noise floor, v1 as the frozen plain prompt. " +

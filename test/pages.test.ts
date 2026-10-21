@@ -8,8 +8,10 @@ import { Store, type Project, type Run } from "../src/hub/store.ts";
 import { openDb } from "../src/hub/db.ts";
 import { build, buildFrom } from "../src/report/build.ts";
 import { runFragments, verdictSummary } from "../src/hub/pages/run-sections.ts";
-import { copySummary } from "../src/hub/share.ts";
-import type { VariantOutput } from "../src/types.ts";
+import { copySummary, plainSummary } from "../src/hub/share.ts";
+import type { Suite, VariantOutput } from "../src/types.ts";
+import { suiteInfo, SuiteSchema } from "../src/cli.ts";
+import { labelsPage } from "../src/hub/pages/labels.ts";
 
 const example = join(
   import.meta.dir,
@@ -68,6 +70,86 @@ describe("hub pages", () => {
     store.putJudges(run.key, b.judges);
     return store;
   }
+
+  test("suite timeline survives registration and renders only declared, escaped steps", () => {
+    const timeline = [
+      { version: "v1", headline: "Plain <prompt>", number: "4 findings" },
+      { version: "v2", headline: "Canonical classes", number: "0 findings" },
+    ];
+    const suite = SuiteSchema.parse({
+      name: "custom",
+      description: "Custom",
+      cases: async () => [],
+      variants: [{ name: "v1", description: "", run: async () => ({}) }],
+      checks: [],
+      baseline: "v1",
+      candidate: "v1",
+      timeline,
+    });
+    const info = suiteInfo(suite as unknown as Suite);
+    expect(info.timeline).toEqual(timeline);
+    const row = {
+      project_id: project.id,
+      name: suite.name,
+      description: suite.description,
+      path: "suite.ts",
+      info,
+      registered_at: "",
+    };
+    const store = new Store(openDb(":memory:"));
+    store.upsertProject(project);
+    store.upsertSuite(row);
+    const html = projectPage(project, store.listSuites(project.id), []);
+    expect(html).toContain("Version timeline");
+    expect(html).toContain("Plain &lt;prompt&gt;");
+    expect(html).toContain("0 findings");
+    expect(html.indexOf("Version timeline")).toBeLessThan(
+      html.indexOf(">Runs</h2>"),
+    );
+    for (const value of [undefined, [{ version: "v1" }], "bad"])
+      expect(
+        projectPage(project, [{ ...row, info: { timeline: value } }], []),
+      ).not.toContain("Version timeline");
+    store.db.close();
+  });
+
+  test("labels keep the review UI and expose a sentence hint and counted progress", () => {
+    const html = labelsPage(project, run, b.lines, {}, [
+      {
+        case_id: "GOLD-01",
+        variant: b.meta.candidate,
+        human: "pass",
+        note: "",
+      },
+    ]);
+    expect(html).toContain("Press <b>p</b> to pass");
+    expect(html).toContain('aria-label="Labels completed"');
+    expect(html).toContain('aria-valuetext="1 of 27 labelled"');
+    expect(html).toContain('value="1" max="27"');
+    const empty = labelsPage(project, run, [], {}, []);
+    expect(empty).toContain('aria-valuetext="0 of 0 labelled"');
+  });
+
+  test("project runs reuse the run verdict for complete, pending and missing comparisons", () => {
+    const store = landingStore();
+    const pending = { ...run, run_id: "pending", status: "queued" as const };
+    const missing = {
+      ...run,
+      key: "missing",
+      run_id: "missing",
+      meta: undefined,
+    };
+    const html = projectPage(project, [], [run, pending, missing], { store });
+    for (const [r, built] of [
+      [run, b],
+      [pending, undefined],
+      [missing, undefined],
+    ] as const)
+      expect(html).toContain(plainSummary(verdictSummary(r, built).sentence));
+    expect(html).not.toContain("<th>status</th>");
+    expect(html).toContain('aria-label="Runs"');
+    store.db.close();
+  });
 
   test("case compares stored fields and decisions, preserving every record in the drawer", () => {
     const lines = b.lines.filter((l) => l.case_id === "GOLD-01");

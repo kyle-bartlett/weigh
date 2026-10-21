@@ -1,9 +1,10 @@
 import { esc } from "../../report/html.ts";
 import { buildFrom, type JudgeRecord } from "../../report/build.ts";
-import { pct, signedPct } from "../../stats.ts";
 import type { Project, Run, Store, SuiteRow } from "../store.ts";
 import { page, statusTag, when } from "./layout.ts";
 import { verdictSummary, plainName } from "./run-sections.ts";
+import { plainSummary } from "../share.ts";
+import { timelineSchema } from "../../timeline.ts";
 
 /** The landing uses the same stored comparison and verdict wording as the run page. */
 export function homePage(
@@ -76,25 +77,29 @@ export function projectPage(
   project: Project,
   suites: SuiteRow[],
   runs: Run[],
-  opts: { admin?: boolean; generatedAt?: string } = {},
+  opts: { admin?: boolean; generatedAt?: string; store?: Store } = {},
 ): string {
   const rows = runs
     .map((r) => {
-      const s = r.summary;
-      const prog =
-        r.total > 0
-          ? `${r.finished}/${r.total}`
-          : r.status === "queued"
-            ? "waiting"
-            : "";
-      return `<tr><td class="mono"><a href="/r/${esc(r.suite)}/${esc(r.run_id)}">${esc(r.run_id)}</a></td><td class="mono">${esc(r.suite)}</td><td>${statusTag(r.status)}</td><td class="num">${esc(prog)}</td><td>${s ? `<span class="tag ${s.pass ? "green" : "amber"}">${s.pass ? "pass" : "fail"}</span>` : ""}</td><td class="num">${s ? `${pct(s.baseline_pass_all ?? NaN, 0)} to ${pct(s.candidate_pass_all ?? NaN, 0)}` : ""}</td><td class="num">${s ? esc(signedPct(s.prompt_tokens_pct ?? NaN)) : ""}</td><td class="num">${when(r.requested_at)}</td></tr>`;
+      const built = opts.store
+        ? safeBuild(opts.store, r, opts.store.judges(r.key))
+        : undefined;
+      const sentence = plainSummary(verdictSummary(r, built).sentence);
+      return `<tr><td class="mono"><a href="/r/${esc(encodeURIComponent(r.suite))}/${esc(encodeURIComponent(r.run_id))}">${esc(r.run_id)}</a></td><td class="mono">${esc(r.suite)}</td><td>${esc(sentence)}</td><td class="num">${when(r.requested_at)}</td></tr>`;
+    })
+    .join("");
+  const timelines = suites
+    .map((suite) => {
+      const parsed = timelineSchema.safeParse(suite.info.timeline);
+      if (!parsed.success || !parsed.data.length) return "";
+      return `<section aria-label="Version timeline"><h2 class="display">Version timeline</h2><p>${landingText(suite.name)}</p><ol class="version-timeline">${parsed.data.map((step) => `<li><h3>${landingText(step.version)}</h3><p>${landingText(step.headline)}</p><p class="mono">${landingText(step.number)}</p></li>`).join("")}</ol></section>`;
     })
     .join("");
   const suiteList = suites.length
     ? suites
         .map(
           (s) =>
-            `<div class="card"><h3 class="mono">${esc(s.name)}</h3><p>${esc(s.description)}</p><div class="row"><span>${esc(String((s.info.variants as unknown[] | undefined)?.length ?? 0))} variants · ${esc(String((s.info.checks as unknown[] | undefined)?.length ?? 0))} checks</span>${
+            `<div class="card"><h3 class="mono">${esc(s.name)}</h3><p>${landingText(s.description)}</p><div class="row"><span>${esc(String((s.info.variants as unknown[] | undefined)?.length ?? 0))} variants · ${esc(String((s.info.checks as unknown[] | undefined)?.length ?? 0))} checks</span>${
               opts.admin
                 ? `<form class="inline" method="post" action="/api/runs" data-enqueue><input type="hidden" name="project" value="${esc(project.id)}"><input type="hidden" name="suite" value="${esc(s.name)}"><button class="btn primary" type="submit">Run now</button></form>`
                 : ""
@@ -102,11 +107,12 @@ export function projectPage(
         )
         .join("")
     : `<p class="empty">No suite registered yet. The agent registers <span class="mono">weigh/*.suite.ts</span> from the repo the first time it pulls.</p>`;
-  const body = `<h1 class="page display">${esc(project.name)}</h1>
-<p class="lede">${esc(project.description)}${project.repo_url ? ` <span class="mono" style="font-size:14px">${esc(project.repo_url)}${project.branch ? ` @ ${esc(project.branch)}` : ""}</span>` : ""}</p>
+  const body = `<main class="project-page"><h1 class="page display">${landingText(project.name)}</h1>
+<p class="lede">${landingText(project.description)}${project.repo_url ? ` <span class="mono" style="font-size:14px">${esc(project.repo_url)}${project.branch ? ` @ ${esc(project.branch)}` : ""}</span>` : ""}</p>
+${timelines}
 <section style="padding-top:0;border-top:0"><div class="sec-head"><h2 class="display">Suites</h2><p>A suite names its cases, its variants and its binary checks. The baseline and candidate it declares are what the gate compares.</p></div><div class="cards" style="margin-top:0">${suiteList}</div></section>
 <section><div class="sec-head"><h2 class="display">Runs</h2><p>Newest first. A running row fills in live on its own page.</p></div>
-${rows ? `<table><thead><tr><th>run</th><th>suite</th><th>status</th><th class="num">pairs</th><th>gate</th><th class="num">pass-all</th><th class="num">tokens</th><th class="num">requested</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="empty">No runs yet.</p>'}</section>`;
+${rows ? `<div class="table-scroll" role="region" aria-label="Runs" tabindex="0"><table><thead><tr><th>Run</th><th>Suite</th><th>Verdict</th><th class="num">Requested</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="empty">No runs yet.</p>'}</section></main>`;
   return page({
     title: `${project.name} · Weigh`,
     body,

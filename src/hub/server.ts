@@ -31,6 +31,7 @@ import { type Project, type Run, runKey, Store, TERMINAL } from "./store.ts";
 import { Streams } from "./stream.ts";
 import { handleMcp } from "./mcp.ts";
 import { type LabelRow, validate } from "../judge.ts";
+import { readAnalyticsSite, withAnalytics } from "./pages/layout.ts";
 import { labelsPage } from "./pages/labels.ts";
 import { scopesOf } from "./auth.ts";
 
@@ -94,6 +95,7 @@ const route = (method: string, path: string, handler: Handler): Route => {
 };
 
 export function startHub(o: HubOptions) {
+  const analyticsSite = readAnalyticsSite();
   const configuredOrigin = readPublicOrigin();
   const tokens = o.tokens ?? tokensFromEnv();
   const store = new Store(openDb(o.dbPath));
@@ -108,11 +110,22 @@ export function startHub(o: HubOptions) {
     status = 200,
     extra: Record<string, string> = {},
   ) => {
-    return new Response(body, {
+    const security = { ...SECURITY };
+    if (analyticsSite && status >= 200 && status < 300)
+      security["content-security-policy"] = security["content-security-policy"]
+        .replace(
+          "script-src 'self';",
+          "script-src 'self' https://www.staats.ai;",
+        )
+        .replace(
+          "connect-src 'self';",
+          "connect-src 'self' https://www.staats.ai;",
+        );
+    return new Response(withAnalytics(body, analyticsSite, status), {
       status,
       headers: {
         "content-type": "text/html; charset=utf-8",
-        ...SECURITY,
+        ...security,
         ...extra,
       },
     });
@@ -284,7 +297,7 @@ export function startHub(o: HubOptions) {
           p,
           store.listSuites(p.id),
           store.listRuns({ project: p.id, limit: 100 }),
-          { admin: c.scopes.has("admin"), generatedAt: now() },
+          { admin: c.scopes.has("admin"), generatedAt: now(), store },
         ),
       );
     }),

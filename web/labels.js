@@ -61,6 +61,14 @@ function render() {
   const done = data.cases.filter((x) => labels.has(x.id)).length;
   const p = document.querySelector("[data-progress]");
   if (p) p.textContent = `${done} of ${data.cases.length}`;
+  const bar = document.querySelector("[data-label-progress]");
+  if (bar) {
+    bar.value = done;
+    bar.setAttribute(
+      "aria-valuetext",
+      `${done} of ${data.cases.length} labelled`,
+    );
+  }
 }
 
 async function save(human) {

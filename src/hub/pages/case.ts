@@ -164,7 +164,7 @@ export function casePage(
 <dt>cost</dt><dd class="mono">$${l.usage.costUsd.toFixed(4)}${l.usage.metered ? "" : " (estimate)"}</dd>
 <dt>latency</dt><dd class="mono">${Math.round(l.usage.latencyMs).toLocaleString("en-US")} ms · ${l.usage.calls} call${l.usage.calls === 1 ? "" : "s"}</dd>
 <dt>at</dt><dd class="mono">${when(l.at)}</dd>${stages}${extra}</dl>
-<table style="margin:14px 0"><thead><tr><th>check</th><th>verdict</th></tr></thead><tbody>${checks}</tbody></table>
+<div class="table-scroll" role="region" aria-label="Stored check results" tabindex="0"><table style="margin:14px 0"><thead><tr><th>check</th><th>verdict</th></tr></thead><tbody>${checks}</tbody></table></div>
 ${body}
 <details><summary>Trace line (JSON)</summary><pre class="out">${esc(JSON.stringify(l, null, 2))}</pre></details>
 ${o?.output !== undefined ? `<details><summary>Full output record (JSON)</summary><pre class="out">${esc(JSON.stringify(o.output, null, 2))}</pre></details>` : ""}</div>`;

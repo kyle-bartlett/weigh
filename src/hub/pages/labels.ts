@@ -56,8 +56,12 @@ export function labelsPage(
     labels: labels.filter((l) => l.variant === candidate),
     splits: ["train", "dev", "test"],
   };
+  const done = order.filter((id) =>
+    data.labels.some((l) => l.case_id === id),
+  ).length;
   const body = `<h1 class="page display">Label ${esc(run.suite)} <span class="mono" style="font-size:.5em;color:var(--ink3)">${esc(run.run_id)}</span></h1>
-<p class="lede">Labels go on the candidate (<b class="mono">${esc(candidate)}</b>). <b>p</b> pass, <b>f</b> fail, <b>n</b> next, <b>b</b> back, <b>/</b> note. Progress: <span data-progress class="mono">0 of ${order.length}</span>. <a href="${href}">Back to the run</a>.</p>
+<p class="lede">Labels go on the candidate (<b class="mono">${esc(candidate)}</b>). Press <b>p</b> to pass, <b>f</b> to fail, <b>n</b> for next, <b>b</b> for back, or <b>/</b> to write a note. Progress: <span data-progress class="mono">${done} of ${order.length}</span>. <a href="${href}">Back to the run</a>.</p>
+<progress data-label-progress aria-label="Labels completed" aria-valuetext="${done} of ${order.length} labelled" value="${done}" max="${Math.max(1, order.length)}" style="display:block;width:100%;height:12px;margin-bottom:20px;accent-color:var(--live)"></progress>
 <div data-labels-app>${order.length ? "" : '<p class="empty">No candidate outputs yet.</p>'}</div>
 <script id="labels-data" type="application/json">${esc(JSON.stringify(data)).replace(/&quot;/g, '"')}</script>`;
   return page({

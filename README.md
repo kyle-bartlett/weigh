@@ -103,11 +103,11 @@ bun src/cli.ts report reposcout-transcript --candidate full-repeat  # the noise 
 
 Reports and traces are committed under `runs/examples/reposcout-transcript-2026-10-19`.
 
-| | full | jev-filter | jev-strict | full-repeat |
-|---|---|---|---|---|
-| prompt tokens per video | 7,105 | 6,396 (-10.0%) | 5,629 (-20.8%) | same inputs |
-| pass-all | 42 of 46 | 40 of 46 | 40 of 46 | 40 of 46 |
-| item recall | 24 of 27 | 21 of 27 | 21 of 27 | 22 of 27 |
+|                         | full     | jev-filter     | jev-strict     | full-repeat |
+| ----------------------- | -------- | -------------- | -------------- | ----------- |
+| prompt tokens per video | 7,105    | 6,396 (-10.0%) | 5,629 (-20.8%) | same inputs |
+| pass-all                | 42 of 46 | 40 of 46       | 40 of 46       | 40 of 46    |
+| item recall             | 24 of 27 | 21 of 27       | 21 of 27       | 22 of 27    |
 
 Neither filter cleared the gate, so the filter stays off in production. Two things the run taught that a
 token count alone would have hidden:
@@ -154,12 +154,12 @@ bun src/cli.ts judge-validate exchange-triage suites/exchange-triage.labels.json
 Reports, traces, judge validation and the review page are committed under
 `runs/examples/exchange-triage-2026-10-19`.
 
-| | v1 | v2 | v3 | v2-repeat |
-|---|---|---|---|---|
-| fields correct | 23 of 27 | 26 of 27 | 27 of 27 | 26 of 27 |
-| decision correct | 27 of 27 | 23 of 27 | 23 of 27 | 23 of 27 |
-| construction canonical | 14 of 18 | 18 of 18 | 18 of 18 | 18 of 18 |
-| prompt tokens per case | 4,362 | 4,778 | 5,076 | 4,775 |
+|                        | v1       | v2       | v3       | v2-repeat |
+| ---------------------- | -------- | -------- | -------- | --------- |
+| fields correct         | 23 of 27 | 26 of 27 | 27 of 27 | 26 of 27  |
+| decision correct       | 27 of 27 | 23 of 27 | 23 of 27 | 23 of 27  |
+| construction canonical | 14 of 18 | 18 of 18 | 18 of 18 | 18 of 18  |
+| prompt tokens per case | 4,362    | 4,778    | 5,076    | 4,775     |
 
 The gate passed v3 over v2: it fixed the one field v2 missed (the subclass guess the production fix was
 written for) and regressed nothing. The same gate run against v1 fails, because decision accuracy fell from
@@ -228,6 +228,15 @@ origin without a path, query, fragment or credentials (a trailing slash is allow
 An empty value counts as unset. Any other invalid value is ignored with one startup
 warning. When valid, it takes precedence over the Host header; when unset, the existing
 Host and `X-Forwarded-Proto` behavior stays.
+
+Set optional `WEIGH_ANALYTICS_SITE=<site code>` on the hub to enable staats.
+The hub reads the code once at startup; unset or whitespace-only disables tracking.
+The script is included only on successful HTML pages, never on error pages.
+Events: `verdict_viewed` when the run verdict enters the viewport (once per page
+view), `case_opened` when a case page opens or its drawer expands,
+`engineers_opened` when For engineers expands, and `copy_summary` when Copy summary
+is pressed. Missing or blocked staats leaves the UI usable. Restart after changing
+the code; the site context can record these meanings when a site is provisioned.
 
 The design and its decisions: `docs/superpowers/specs/2026-10-20-weigh-platform.md`.
 

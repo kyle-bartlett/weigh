@@ -144,7 +144,10 @@ async function refresh() {
     }
     for (const id of openCases) {
       const detail = $(`tr[data-case="${CSS.escape(id)}"] details`);
-      if (detail) detail.open = true;
+      if (detail) {
+        detail.dataset.analyticsRestored = "";
+        detail.open = true;
+      }
     }
     total = f.total;
     finished = f.finished;

@@ -99,6 +99,8 @@ export interface Gate {
 }
 
 export interface Suite {
+  /** Optional, suite-authored version story for the project page. */
+  timeline?: import("./timeline.ts").TimelineStep[];
   name: string;
   description: string;
   cases: () => Promise<Case[]>;

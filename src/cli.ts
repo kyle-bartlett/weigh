@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
+import { timelineSchema } from "./timeline.ts";
 import { readLabels, validate } from "./judge.ts";
 import { build, type JudgeRecord, summaryLine } from "./report/build.ts";
 import { renderHtml } from "./report/html.ts";
@@ -77,6 +78,7 @@ export const SuiteSchema = z
   .object({
     name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "lowercase slug"),
     description: z.string(),
+    timeline: timelineSchema.optional(),
     cases: isFn,
     variants: z
       .array(
@@ -151,6 +153,7 @@ export async function loadSuite(path: string): Promise<Suite> {
 
 /** What the agent needs to register a suite with the hub, without building a single case. */
 export const suiteInfo = (s: Suite) => ({
+  timeline: s.timeline,
   name: s.name,
   description: s.description,
   variants: s.variants.map((v) => ({

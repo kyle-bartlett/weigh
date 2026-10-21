@@ -8,6 +8,18 @@ import type { RunStatus } from "../../events.ts";
  */
 
 export const HUB_CSS = `
+.phone-ready{overflow-wrap:anywhere}
+.phone-ready .cards{grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))}
+.phone-ready .card .row{flex-wrap:wrap}
+.phone-ready a,.phone-ready button,.phone-ready select,.phone-ready summary{min-height:44px;min-width:44px;max-width:100%}
+.phone-ready a{display:inline-flex;align-items:center}.phone-ready a.card{display:block}
+.phone-ready summary{padding-block:10px;cursor:pointer}
+.phone-ready .comparison-picker label{min-width:0;max-width:100%}
+.phone-ready .table-scroll{min-width:0}
+.project-page .version-timeline{list-style:none;padding:0;display:grid;gap:20px}
+.project-page .version-timeline li{border-left:2px solid var(--line);padding-left:20px}
+.project-page .version-timeline p{margin:6px 0}
+@media(max-width:600px){.phone-ready .case-page .kv{grid-template-columns:minmax(0,1fr) minmax(0,2fr)}}
 nav.crumbs{display:flex;gap:10px;align-items:baseline;font-size:14px;color:var(--ink3);margin:28px 0 0;flex-wrap:wrap}
 nav.crumbs a{color:var(--ink2);text-decoration:none}nav.crumbs a:hover{text-decoration:underline}
 h1.page{font-size:clamp(30px,3.6vw,48px);margin:16px 0 14px}
@@ -66,6 +78,23 @@ input.txt{font:inherit;font-size:14px;padding:7px 10px;border:1px solid var(--li
 @media(max-width:600px){.verdict-numbers{gap:12px;grid-template-columns:1fr;padding:12px 0}.verdict-numbers>div{display:grid;grid-template-columns:116px 1fr;column-gap:10px}.verdict-numbers .n{grid-row:1/3;font-size:23px;margin:0}.verdict-numbers p{margin-top:2px}.verdict-card h1{font-size:28px}.verdict-card{padding-top:16px}.ship{margin:10px 0 12px}}
 `;
 
+/** Read once by startHub. An empty deploy-time code disables all tracking. */
+export const readAnalyticsSite = (value = process.env.WEIGH_ANALYTICS_SITE) =>
+  value?.trim() || undefined;
+
+/** Shared head decoration at the HTML response boundary keeps error pages untracked. */
+export function withAnalytics(
+  html: string,
+  site?: string,
+  status = 200,
+): string {
+  if (!site?.trim() || status < 200 || status >= 300) return html;
+  return html.replace(
+    "</head>",
+    `<script defer data-site="${esc(site)}" src="https://www.staats.ai/s.js"></script><script defer src="/web/analytics.js"></script></head>`,
+  );
+}
+
 export interface PageOpts {
   title: string;
   body: string;
@@ -85,6 +114,8 @@ export interface PageOpts {
 }
 
 export function page(o: PageOpts): string {
+  const phonePage =
+    /<main class="(?:landing|project-page|run-page|case-page)"/.test(o.body);
   const crumbs = o.crumbs?.length
     ? `<nav class="crumbs">${o.crumbs.map((c) => (c.href ? `<a href="${esc(c.href)}">${esc(c.text)}</a>` : `<span>${esc(c.text)}</span>`)).join('<span aria-hidden="true">/</span>')}</nav>`
     : "";
@@ -96,7 +127,7 @@ export function page(o: PageOpts): string {
   const social = o.social
     ? `<meta property="og:title" content="${esc(o.social.title)}"><meta property="og:description" content="${esc(o.social.description)}"><meta property="og:image" content="${esc(o.social.image)}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${esc(o.social.image)}">`
     : "";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(o.title)}</title>${social}${FONTS}${o.tour ? '<link rel="stylesheet" href="/web/tour.css">' : ""}<style>${CSS}${HUB_CSS}</style></head><body><div class="wrap">
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(o.title)}</title>${social}${FONTS}${o.tour ? '<link rel="stylesheet" href="/web/tour.css">' : ""}<style>${CSS}${HUB_CSS}</style></head><body${phonePage ? ' class="phone-ready"' : ""}><div class="wrap">
 <div class="top"><div><a href="/" style="text-decoration:none"><span class="name">Weigh</span></a> <span class="meta">evals you can watch</span></div><div class="meta mono">${esc((o.generatedAt ?? new Date().toISOString()).slice(0, 16).replace("T", " "))} UTC</div></div>
 ${crumbs}
 ${o.body}
