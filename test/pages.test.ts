@@ -191,6 +191,7 @@ describe("hub pages", () => {
           ],
           decision: "REFERRED",
           expectedDecision: "REFERRED",
+          decisionCorrect: false,
         }),
       ],
     ]);
@@ -211,9 +212,34 @@ describe("hub pages", () => {
     );
     expect(product).toContain("No stored answer for this field.");
     expect(product).toContain("Stored expert answers differ.");
-    expect(product).toContain("send to an underwriter");
+    // decisionCorrect overrides equal decision strings, same as a field's stored verdict.
+    expect(product).toMatch(
+      /<td class="field-difference"><span class="case-decision">send to an underwriter [^]*?<span class="field-verdict">Differs from the expert<\/span><\/td>/,
+    );
     expect(product).toContain("&lt;script&gt;");
     expect(product).not.toContain("<b>, matches");
+    const clean = {
+      fields: [{ field: "a", expected: 1, got: 1, correct: true }],
+      decision: "REFERRED",
+      expectedDecision: "REFERRED",
+      decisionCorrect: true,
+    };
+    const both = (baseline: unknown, candidate: unknown) =>
+      casePage(
+        project,
+        run,
+        "GOLD-01",
+        undefined,
+        lines,
+        new Map([
+          [b.meta.baseline, stored(baseline)],
+          [b.meta.candidate, stored(candidate)],
+        ]),
+      );
+    // Control: clean outputs on both sides raise no notice, so the loop below can only pass on the malformed side.
+    expect(both(clean, clean)).not.toContain(
+      "Some field answers aren't available",
+    );
     for (const malformed of [
       "plain answer",
       null,
@@ -229,14 +255,7 @@ describe("hub pages", () => {
       },
       { fields: [{ field: "a", expected: 1, got: 1 }], decision: "REFERRED" },
     ]) {
-      const fallback = casePage(
-        project,
-        run,
-        "GOLD-01",
-        undefined,
-        lines,
-        new Map([[b.meta.baseline, stored(malformed)]]),
-      );
+      const fallback = both(malformed, clean);
       expect(fallback).toContain("Some field answers aren't available");
       expect(fallback.split('<details id="engineers">')[1]).toContain(
         "Full output record (JSON)",
