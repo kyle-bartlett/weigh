@@ -21,7 +21,12 @@ import { homePage, projectPage } from "./pages/home.ts";
 import { runPage } from "./pages/run.ts";
 import { runFragments, verdictSummary } from "./pages/run-sections.ts";
 import { renderVerdictPng } from "./og.ts";
-import { publicOrigin, shareControls, shareUrls } from "./share.ts";
+import {
+  publicOrigin,
+  readPublicOrigin,
+  shareControls,
+  shareUrls,
+} from "./share.ts";
 import { type Project, type Run, runKey, Store, TERMINAL } from "./store.ts";
 import { Streams } from "./stream.ts";
 import { handleMcp } from "./mcp.ts";
@@ -89,6 +94,7 @@ const route = (method: string, path: string, handler: Handler): Route => {
 };
 
 export function startHub(o: HubOptions) {
+  const configuredOrigin = readPublicOrigin();
   const tokens = o.tokens ?? tokensFromEnv();
   const store = new Store(openDb(o.dbPath));
   const streams = new Streams();
@@ -289,7 +295,7 @@ export function startHub(o: HubOptions) {
         runPage(project, run, built(run, pick), {
           pick,
           generatedAt: now(),
-          origin: publicOrigin(c.req, c.url),
+          origin: publicOrigin(c.req, c.url, configuredOrigin),
         }),
       );
     }),
@@ -331,7 +337,7 @@ export function startHub(o: HubOptions) {
         share: shareControls(
           run,
           b,
-          shareUrls(run, b, publicOrigin(c.req, c.url)).link,
+          shareUrls(run, b, publicOrigin(c.req, c.url, configuredOrigin)).link,
         ),
         status: run.status,
         finished: run.finished,
@@ -926,7 +932,8 @@ export function startHub(o: HubOptions) {
     development: false,
     idleTimeout: 255,
     fetch: async (req, srv) => {
-      const url = requestUrl(req.url, `http://${srv.hostname}:${srv.port}`);
+      // This hub always serves TCP; Bun's types also cover Unix sockets.
+      const url = requestUrl(req.url, bindBase(srv.hostname!, srv.port!));
       const ip =
         req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
         srv.requestIP(req)?.address ||
@@ -960,7 +967,10 @@ export function startHub(o: HubOptions) {
     server,
     store,
     streams,
-    url: `http://${server.hostname === "0.0.0.0" ? "127.0.0.1" : server.hostname}:${server.port}`,
+    url: bindBase(
+      server.hostname === "0.0.0.0" ? "127.0.0.1" : server.hostname!,
+      server.port!,
+    ),
     stop: () => {
       clearInterval(sweep);
       server.stop(true);
@@ -969,8 +979,17 @@ export function startHub(o: HubOptions) {
   };
 }
 
+/** IPv6 literals need brackets when used as the authority of a URL. */
+export function bindBase(hostname: string, port: number): string {
+  const host =
+    hostname.includes(":") && !hostname.startsWith("[")
+      ? `[${hostname}]`
+      : hostname;
+  return `http://${host}:${port}`;
+}
+
 /** A malformed Host header makes Bun hand over an unparsable absolute URL. Keep the path, drop the host. */
-function requestUrl(raw: string, base: string): URL {
+export function requestUrl(raw: string, base: string): URL {
   try {
     return new URL(raw, base);
   } catch {

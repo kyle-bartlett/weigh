@@ -35,8 +35,40 @@ export function copySummary(
   ].join("\n");
 }
 
-/** No public-origin setting exists. Only accept a host and an HTTP scheme from the proxy. */
-export function publicOrigin(req: Request, url: URL): string {
+/** Read once at hub startup; never log the value, which may contain credentials. */
+export function readPublicOrigin(
+  value = process.env.WEIGH_PUBLIC_ORIGIN,
+): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    const parsed = new URL(value);
+    if (
+      /^https?:\/\/[^/?#\\\s]+\/?$/i.test(value) &&
+      !value.includes("@") &&
+      parsed.hostname &&
+      !parsed.username &&
+      !parsed.password &&
+      parsed.pathname === "/" &&
+      !parsed.search &&
+      !parsed.hash
+    )
+      return parsed.origin;
+  } catch {
+    /* Invalid settings fall back to the existing proxy behavior. */
+  }
+  console.warn(
+    "Ignoring invalid WEIGH_PUBLIC_ORIGIN: expected an HTTP(S) origin without a path, query, fragment or credentials.",
+  );
+  return undefined;
+}
+
+/** A configured origin takes precedence over all request headers. */
+export function publicOrigin(
+  req: Request,
+  url: URL,
+  configured?: string,
+): string {
+  if (configured) return configured;
   const proto =
     req.headers
       .get("x-forwarded-proto")

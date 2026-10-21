@@ -97,7 +97,9 @@ export function verdictSummary(run: Run, b?: Built) {
     answers: complete ? answers : "",
     cost,
     changed:
-      complete && b ? changedSentence(b) : "The comparison isn't finished yet.",
+      complete && b
+        ? changedSentence(b, run.meta?.baseline)
+        : "The comparison isn't finished yet.",
     story: [sentence, complete ? answers : "", cost, `${ship}.`]
       .filter(Boolean)
       .join(" "),
@@ -251,12 +253,23 @@ function changedGroups(b: Built) {
   return { fixed, broken };
 }
 
-export function changedSentence(b: Built): string {
+export function changedSentence(
+  b: Built,
+  suiteBaseline = b.meta.baseline,
+): string {
   const { fixed, broken } = changedGroups(b);
-  return `${fixed.length} ${fixed.length === 1 ? "case" : "cases"} gained a passing check; ${broken.length} ${broken.length === 1 ? "case" : "cases"} lost one, compared with the current prompt.`;
+  const baseline =
+    b.meta.baseline === suiteBaseline
+      ? "the current prompt"
+      : esc(plainName(b.meta.baseline));
+  return `${fixed.length} ${fixed.length === 1 ? "case" : "cases"} gained a passing check; ${broken.length} ${broken.length === 1 ? "case" : "cases"} lost one, compared with ${baseline}.`;
 }
 
-export function changedCases(b: Built, base: string): string {
+export function changedCases(
+  b: Built,
+  base: string,
+  suiteBaseline = b.meta.baseline,
+): string {
   const { fixed, broken } = changedGroups(b);
   const rows = pairedRows(b);
   const links = (items: typeof rows) =>
@@ -264,7 +277,7 @@ export function changedCases(b: Built, base: string): string {
       .map(({ id }) => `<a href="${esc(caseUrl(base, id))}">${esc(id)}</a>`)
       .join(", ") || "None.";
   return `<section><div class="sec-head"><h2 class="display">What changed, in words</h2><p><b>${fixed.length} ${fixed.length === 1 ? "case" : "cases"} fixed. ${broken.length} ${broken.length === 1 ? "case" : "cases"} broke.</b><br>A case counts once in each group if any check changed. A case can have both a fix and a break; an unanswered check doesn't count as either.</p></div>
-<p>Fixed: ${links(fixed)}</p><p>Broke: ${links(broken)}</p>${broken.length ? `<p>A case that got worse ${tag("regression", "A check passed with the current prompt and failed with the new prompt")}; open it to see which check changed.</p>` : ""}</section>`;
+<p>${changedSentence(b, suiteBaseline)}</p><p>Fixed: ${links(fixed)}</p><p>Broke: ${links(broken)}</p>${broken.length ? `<p>A case that got worse ${tag("regression", "A check passed with the current prompt and failed with the new prompt")}; open it to see which check changed.</p>` : ""}</section>`;
 }
 
 const grader = (b: Built, id: string) =>
@@ -423,7 +436,7 @@ export function runFragments(run: Run, b?: Built) {
   const base = `/r/${encodeURIComponent(run.suite)}/${encodeURIComponent(run.run_id)}`;
   return {
     verdict: verdictCard(run, b),
-    changed: b ? changedCases(b, base) : "",
+    changed: b ? changedCases(b, base, run.meta?.baseline) : "",
     checks: b ? plainChecks(b) : "",
     ledger: b
       ? plainLedger(b, base)

@@ -7,7 +7,8 @@ import { runPage } from "../src/hub/pages/run.ts";
 import { Store, type Project, type Run } from "../src/hub/store.ts";
 import { openDb } from "../src/hub/db.ts";
 import { build, buildFrom } from "../src/report/build.ts";
-import { runFragments } from "../src/hub/pages/run-sections.ts";
+import { runFragments, verdictSummary } from "../src/hub/pages/run-sections.ts";
+import { copySummary } from "../src/hub/share.ts";
 import type { VariantOutput } from "../src/types.ts";
 
 const example = join(
@@ -498,12 +499,29 @@ describe("hub pages", () => {
   });
 
   test("a failed comparison says not to ship and names the loss", () => {
-    const html = runPage(project, run, build(example, { baseline: "v1" }));
+    const selected = build(example, { baseline: "v1" });
+    const html = runPage(project, run, selected);
     expect(html.includes("Don't ship")).toBe(true);
     expect(html.includes("Ship it")).toBe(false);
     expect(html.includes('data-ship="false"')).toBe(true);
     expect(html.includes("Keep the current prompt")).toBe(true);
     expect(html.includes("4 fewer decisions right")).toBe(true);
+    expect(runFragments(run, selected).changed).toContain("compared with v1.");
+    expect(
+      copySummary(
+        verdictSummary(run, selected),
+        "https://weigh.example/r/demo/run?baseline=v1",
+      ).split("\n")[1],
+    ).toContain("compared with v1.");
+    expect(runFragments(run, b).changed).toContain(
+      "compared with the current prompt.",
+    );
+    expect(
+      copySummary(
+        verdictSummary(run, b),
+        "https://weigh.example/r/demo/run",
+      ).split("\n")[1],
+    ).toContain("compared with the current prompt.");
   });
 
   test("unfinished and stopped runs never announce a winner or ship", () => {

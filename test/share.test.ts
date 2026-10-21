@@ -1,8 +1,12 @@
-import { expect, setDefaultTimeout, test } from "bun:test";
-import { startHub } from "../src/hub/server.ts";
+import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import { bindBase, requestUrl, startHub } from "../src/hub/server.ts";
 import { join } from "node:path";
 import { build } from "../src/report/build.ts";
-import { copySummary } from "../src/hub/share.ts";
+import {
+  copySummary,
+  publicOrigin,
+  readPublicOrigin,
+} from "../src/hub/share.ts";
 import { verdictSummary } from "../src/hub/pages/run-sections.ts";
 import { verdictSvg } from "../src/hub/og.ts";
 import { labelsPage } from "../src/hub/pages/labels.ts";
@@ -31,6 +35,96 @@ function exampleHub() {
   hub.store.putJudges(run.key, built.judges);
   return { hub, run: hub.store.getRun(run.key)!, path: `/r/${run.key}` };
 }
+
+test("configured public origin ignores request headers and stays fixed after startup", () => {
+  const previous = process.env.WEIGH_PUBLIC_ORIGIN;
+  const req = new Request("http://internal.example/run", {
+    headers: { host: "wrong.example", "x-forwarded-proto": "http" },
+  });
+  const headers = spyOn(req.headers, "get");
+  try {
+    process.env.WEIGH_PUBLIC_ORIGIN = "https://Public.example:8443/";
+    const configured = readPublicOrigin();
+    process.env.WEIGH_PUBLIC_ORIGIN = "https://changed.example";
+    expect(publicOrigin(req, new URL(req.url), configured)).toBe(
+      "https://public.example:8443",
+    );
+    expect(headers).not.toHaveBeenCalled();
+    expect(readPublicOrigin("http://[::1]:8787")).toBe("http://[::1]:8787");
+  } finally {
+    headers.mockRestore();
+    if (previous === undefined) delete process.env.WEIGH_PUBLIC_ORIGIN;
+    else process.env.WEIGH_PUBLIC_ORIGIN = previous;
+  }
+});
+
+test("unset and invalid public origins retain proxy behavior with one warning per startup", () => {
+  const previous = process.env.WEIGH_PUBLIC_ORIGIN;
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  const req = new Request("http://internal.example/run", {
+    headers: {
+      host: "preview.example:8443",
+      "x-forwarded-proto": "https, http",
+    },
+  });
+  try {
+    delete process.env.WEIGH_PUBLIC_ORIGIN;
+    expect(readPublicOrigin()).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+    expect(publicOrigin(req, new URL(req.url))).toBe(
+      "https://preview.example:8443",
+    );
+    for (const value of [
+      "",
+      "/relative",
+      "ftp://example.com",
+      "https://example.com/path",
+      "https://example.com/?q=x",
+      "https://example.com?",
+      "https://example.com#",
+      "https://reader:private@example.com",
+      "https://@example.com",
+      "https://example.com:99999",
+      " https://example.com",
+      "https://example.com/..",
+      "https://example.com\\path",
+    ]) {
+      warn.mockClear();
+      process.env.WEIGH_PUBLIC_ORIGIN = value;
+      const configured = readPublicOrigin();
+      expect(configured).toBeUndefined();
+      for (let n = 0; n < 2; n++)
+        expect(publicOrigin(req, new URL(req.url), configured)).toBe(
+          "https://preview.example:8443",
+        );
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).not.toContain("reader:private");
+    }
+  } finally {
+    warn.mockRestore();
+    if (previous === undefined) delete process.env.WEIGH_PUBLIC_ORIGIN;
+    else process.env.WEIGH_PUBLIC_ORIGIN = previous;
+  }
+});
+
+test("bind base brackets IPv6 for path-only and malformed-host URL fallback", () => {
+  for (const [host, authority] of [
+    ["::", "[::]"],
+    ["::1", "[::1]"],
+    ["2001:db8::1", "[2001:db8::1]"],
+    ["[::1]", "[::1]"],
+    ["127.0.0.1", "127.0.0.1"],
+    ["localhost", "localhost"],
+  ]) {
+    const base = bindBase(host!, 8787);
+    expect(base).toBe(`http://${authority}:8787`);
+    for (const raw of [
+      "/r/demo/run?baseline=v1",
+      "http://bad.example:99999/r/demo/run?baseline=v1",
+    ])
+      expect(requestUrl(raw, base).href).toBe(`${base}/r/demo/run?baseline=v1`);
+  }
+});
 
 test("latest returns a plain 404 or the newest anonymously visible finished run", async () => {
   const hub = startHub({ dbPath: ":memory:", port: 0, tokens: {} });

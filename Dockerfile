@@ -9,6 +9,8 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production --ignore-scripts
+# The slim base uses glibc; Bun can install both GNU and musl optional builds.
+RUN bun -e 'const fs = require("node:fs"); const keep = `resvg-js-linux-${process.arch}-gnu`; const dir = "node_modules/@resvg"; if (!fs.existsSync(`${dir}/${keep}`)) throw new Error(`Missing ${keep}`); for (const name of fs.readdirSync(dir)) if (name.startsWith("resvg-js-") && name !== keep) fs.rmSync(`${dir}/${name}`, { recursive: true, force: true }); require("@resvg/resvg-js");'
 COPY src ./src
 COPY web ./web
 

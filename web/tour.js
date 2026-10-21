@@ -25,7 +25,11 @@ const steps = [
 let started = false;
 
 function start() {
-  if (started || !document.querySelector('[data-share][data-finished="true"]'))
+  if (
+    started ||
+    window.location.hash ||
+    !document.querySelector('[data-share][data-finished="true"]')
+  )
     return;
   try {
     if (localStorage.getItem(key)) return;
@@ -53,13 +57,34 @@ function start() {
   let index = 0;
   let anchor;
   let frame = 0;
+  const originalPadding = document.body.style.paddingBottom;
+  const bodyPadding =
+    parseFloat(window.getComputedStyle(document.body).paddingBottom) || 0;
+  let mobile = false;
 
-  function position() {
+  function position(reveal = false) {
     if (!anchor?.isConnected) return;
     const rect = anchor.getBoundingClientRect();
     const width = document.documentElement.clientWidth;
     const height = window.innerHeight;
     const box = dialog.getBoundingClientRect();
+    if (width <= 640) {
+      dialog.style.left = "0px";
+      dialog.style.top = "auto";
+      // Extra scroll room keeps even the last anchor above the sheet.
+      document.body.style.paddingBottom = `${bodyPadding + box.height + 24}px`;
+      if (reveal || !mobile) {
+        const space = Math.max(0, height - box.height - 24);
+        window.scrollBy({
+          top: rect.top - 12 - Math.max(0, (space - rect.height) / 2),
+          behavior: "instant",
+        });
+      }
+      mobile = true;
+      return;
+    }
+    if (mobile) document.body.style.paddingBottom = originalPadding;
+    mobile = false;
     const below = rect.bottom + 12;
     const top =
       below + box.height <= height - 12 ? below : rect.top - box.height - 12;
@@ -68,15 +93,20 @@ function start() {
   }
   function schedulePosition() {
     cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(position);
+    frame = requestAnimationFrame(() => position());
+  }
+  function resize() {
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => position(true));
   }
   function close() {
     cancelAnimationFrame(frame);
     anchor?.classList.remove("tour-target");
-    window.removeEventListener("resize", schedulePosition);
+    window.removeEventListener("resize", resize);
     window.removeEventListener("scroll", schedulePosition, true);
     dialog.close();
     dialog.remove();
+    document.body.style.paddingBottom = originalPadding;
     if (previous instanceof HTMLElement && previous.isConnected)
       previous.focus({ preventScroll: true });
   }
@@ -99,15 +129,16 @@ function start() {
     back.disabled = index === 0;
     next.textContent = index === available.length - 1 ? "Done" : "Next";
     anchor.classList.add("tour-target");
-    anchor.scrollIntoView({
-      block: "center",
-      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
-        ? "instant"
-        : "smooth",
-    });
+    if (document.documentElement.clientWidth > 640)
+      anchor.scrollIntoView({
+        block: "center",
+        behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "instant"
+          : "smooth",
+      });
     if (!dialog.open) dialog.showModal();
     title.focus({ preventScroll: true });
-    position();
+    position(true);
   }
   back.addEventListener("click", () => {
     index--;
@@ -125,7 +156,7 @@ function start() {
     event.preventDefault();
     close();
   });
-  window.addEventListener("resize", schedulePosition);
+  window.addEventListener("resize", resize);
   window.addEventListener("scroll", schedulePosition, true);
   show();
 }
