@@ -61,6 +61,17 @@ describe("hub pages", () => {
     last_src_seq: 110,
   };
 
+  let mutationSeq = 0;
+  function touch(store: Store): void {
+    store.insertEvent(run.key, "hub", ++mutationSeq, {
+      type: "log",
+      level: "info",
+      text: "test mutation",
+      seq: 1,
+      at: new Date().toISOString(),
+    });
+  }
+
   function landingStore() {
     const store = new Store(openDb(":memory:"));
     store.upsertProject(project);
@@ -363,6 +374,29 @@ describe("hub pages", () => {
     }
   });
 
+  test("landing reuses the featured comparison until the run snapshot changes", () => {
+    const store = landingStore();
+    try {
+      const html = homePage(store);
+      const traces = store.traces.bind(store);
+      let reads = 0;
+      store.traces = (key: string) => (reads++, traces(key));
+      expect(homePage(store)).toBe(html);
+      expect(reads).toBe(0);
+      touch(store);
+      homePage(store);
+      expect(reads).toBe(1);
+      store.db.run("DELETE FROM trace_lines WHERE run_key = ?", [run.key]);
+      touch(store);
+      const empty = homePage(store);
+      reads = 0;
+      expect(homePage(store)).toBe(empty);
+      expect(reads).toBe(0);
+    } finally {
+      store.db.close();
+    }
+  });
+
   test("landing normalizes offset timestamps and version punctuation", () => {
     const store = landingStore();
     try {
@@ -384,6 +418,7 @@ describe("hub pages", () => {
       });
       for (const line of b.lines.filter((l) => l.variant === b.meta.candidate))
         store.upsertTrace(run.key, { ...line, variant: candidate });
+      touch(store);
       const html = homePage(store);
       expect(html).not.toMatch(DASH);
       expect(html.replace(/<[^>]*>/g, "")).not.toMatch(/\d\+/);
@@ -458,6 +493,7 @@ describe("hub pages", () => {
       expect(html).toContain(`graders checked against ${joined} human labels`);
       expect(html).not.toContain("3 human labels");
       store.db.run("DELETE FROM judges WHERE run_key = ?", [run.key]);
+      touch(store);
       html = homePage(store);
       expect(html).toContain(
         "3 human labels recorded; graders not checked yet.",
@@ -472,6 +508,7 @@ describe("hub pages", () => {
         "No human labels recorded for this run.",
       );
       store.db.run("DELETE FROM trace_lines WHERE run_key = ?", [run.key]);
+      touch(store);
       html = homePage(store);
       expect(html).toContain("This comparison has no graded cases.");
       expect(html).toContain("Case count not available.");
@@ -570,11 +607,13 @@ describe("hub pages", () => {
     const store = landingStore();
     try {
       store.updateRun(run.key, { meta: { ...b.meta, baseline: "v1" } });
+      touch(store);
       const html = homePage(store);
       expect(html).toContain("4 fewer decisions right");
       expect(html).toContain("Don't ship.");
       expect(html).not.toContain("Ship it.");
       store.db.run("DELETE FROM trace_lines WHERE run_key = ?", [run.key]);
+      touch(store);
       const empty = homePage(store);
       expect(empty).toContain("This comparison has no graded cases.");
       expect(empty).not.toContain("Ship it.");

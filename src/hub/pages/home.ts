@@ -1,5 +1,5 @@
 import { esc } from "../../report/html.ts";
-import { buildFrom, type JudgeRecord } from "../../report/build.ts";
+import { buildFrom, type Built, type JudgeRecord } from "../../report/build.ts";
 import type { Project, Run, Store, SuiteRow } from "../store.ts";
 import { page, statusTag, when } from "./layout.ts";
 import { verdictSummary, plainName } from "./run-sections.ts";
@@ -16,7 +16,7 @@ export function homePage(
     .filter((p) => p.public || opts.includePrivate);
   const latest = store.latestFinishedRun(projects.map((p) => p.id));
   const judges = latest ? store.judges(latest.key) : [];
-  const built = latest ? safeBuild(store, latest, judges) : undefined;
+  const built = latest ? featuredBuild(store, latest, judges) : undefined;
   const href = latest
     ? `/r/${encodeURIComponent(latest.suite)}/${encodeURIComponent(latest.run_id)}`
     : undefined;
@@ -74,6 +74,36 @@ function safeBuild(store: Store, run: Run, judges: JudgeRecord[]) {
 }
 
 /**
+ * A build reads meta, traces and judges. Each one changes only by appending an event (run_start,
+ * job_done, the summary putJudges triggers), which moves last_seq; status covers the finish route.
+ */
+const snapshotOf = (r: Run): string => JSON.stringify([r.last_seq, r.status]);
+
+/**
+ * `/` is the most visited public URL, and building the featured comparison rereads every trace.
+ * Keep the build per run snapshot, using the same key as the sentence cache.
+ */
+const featuredBuilds = new WeakMap<
+  Store,
+  Map<string, { snapshot: string; built: Built | undefined }>
+>();
+function featuredBuild(
+  store: Store,
+  run: Run,
+  judges: JudgeRecord[],
+): Built | undefined {
+  let cache = featuredBuilds.get(store);
+  if (!cache) featuredBuilds.set(store, (cache = new Map()));
+  const snapshot = snapshotOf(run);
+  const hit = cache.get(run.key);
+  if (hit?.snapshot === snapshot) return hit.built;
+  const built = safeBuild(store, run, judges);
+  if (cache.size >= 1000) cache.clear();
+  cache.set(run.key, { snapshot, built });
+  return built;
+}
+
+/**
  * A sentence needs the run's traces. The list shows up to 100 runs on a public route, so each
  * sentence is kept per run snapshot (same key as the share image) instead of rebuilt per view.
  */
@@ -85,7 +115,7 @@ function runSentence(store: Store | undefined, r: Run): string {
   if (!store) return plainSummary(verdictSummary(r, undefined).sentence);
   let cache = sentences.get(store);
   if (!cache) sentences.set(store, (cache = new Map()));
-  const snapshot = JSON.stringify([r.last_seq, r.status]);
+  const snapshot = snapshotOf(r);
   const hit = cache.get(r.key);
   if (hit?.snapshot === snapshot) return hit.sentence;
   const built = safeBuild(store, r, store.judges(r.key));
