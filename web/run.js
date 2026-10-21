@@ -5,7 +5,8 @@ const [suite, run] = script.dataset.run.split("/");
 const base = `/r/${encodeURIComponent(suite)}/${encodeURIComponent(run)}`;
 const api = `/api/runs/${encodeURIComponent(suite)}/${encodeURIComponent(run)}`;
 const $ = (s) => document.querySelector(s);
-const terminal = new Set(["finished", "failed", "cancelled", "lost"]);
+// "lost" is not terminal: the hub lets an agent claim a lost run again, so the stream stays open.
+const terminal = new Set(["finished", "failed", "cancelled"]);
 const openEngineers = () => {
   if (location.hash === "#engineers") {
     const drawer = $("#engineers");
@@ -22,6 +23,8 @@ let animated = false;
 let refreshing = false;
 let dirty = false;
 let timer = 0;
+let lost = false;
+let retries = 0;
 
 function progress() {
   const p = $("[data-progress]");
@@ -29,9 +32,11 @@ function progress() {
     p.textContent = total
       ? ended
         ? `Graded ${finished} of ${total} cases.`
-        : finished < total
-          ? `Grading case ${finished + 1} of ${total}`
-          : `Graded ${finished} of ${total} cases. Finishing the comparison.`
+        : lost
+          ? `Lost contact with the agent after ${finished} of ${total} cases.`
+          : finished < total
+            ? `Grading case ${finished + 1} of ${total}`
+            : `Graded ${finished} of ${total} cases. Finishing the comparison.`
       : "Waiting for the agent.";
   const bar = $("[data-progress-bar]");
   if (bar)
@@ -39,6 +44,7 @@ function progress() {
 }
 
 function status(s) {
+  lost = s === "lost";
   const el = $("[data-status]");
   if (el) {
     el.className = `status ${s}`;
@@ -80,7 +86,14 @@ async function refresh() {
     const response = await fetch(`${base}/fragments${location.search}`, {
       headers: { accept: "application/json" },
     });
+    if (response.status === 404 || response.status === 410) {
+      // The run is gone. Stop polling instead of retrying forever.
+      ended = true;
+      es?.close();
+      return;
+    }
     if (!response.ok) throw new Error("Fragments unavailable");
+    retries = 0;
     const f = await response.json();
     const openCases = [
       ...document.querySelectorAll("tr[data-case] details[open]"),
@@ -113,10 +126,13 @@ async function refresh() {
     progress();
   } catch {
     // Retry the final fetch too: completion must not depend on another event arriving.
-    dirty = true;
+    // Back off and give up after eight misses so a dead run never polls forever.
+    retries += 1;
+    dirty = retries <= 8;
   } finally {
     refreshing = false;
-    if (dirty) timer = setTimeout(refresh, 1500);
+    if (dirty)
+      timer = setTimeout(refresh, Math.min(30000, 1500 * 2 ** retries));
   }
 }
 function schedule() {

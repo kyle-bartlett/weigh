@@ -26,8 +26,8 @@ export function verdictCard(run: Run, b?: Built): string {
   const complete =
     run.status === "finished" &&
     b &&
-    b.cmp.candidate.n === b.meta.case_order.length &&
-    b.cmp.candidate.n > 0;
+    b.cmp.candidate.n > 0 &&
+    b.cmp.baseline.n > 0;
   const B = b?.cmp.baseline,
     C = b?.cmp.candidate;
   const current = version(
@@ -42,21 +42,28 @@ export function verdictCard(run: Run, b?: Built): string {
   const result =
     delta === 0
       ? "the same number of cases passed every check"
-      : `${Math.abs(delta)} ${delta > 0 ? "more" : "fewer"} cases passed every check`;
+      : `${Math.abs(delta)} ${delta > 0 ? "more" : "fewer"} ${Math.abs(delta) === 1 ? "case" : "cases"} passed every check`;
   let sentence = complete
     ? `The ${next} ${delta > 0 ? "beat" : delta < 0 ? "trailed" : "tied"} the ${current}: ${result}.`
-    : run.status === "failed" || run.status === "cancelled"
-      ? "This run stopped before a complete comparison was ready."
-      : "We're still grading the prompts. No winner yet.";
+    : run.status === "finished"
+      ? "This comparison has no graded cases."
+      : run.status === "failed" || run.status === "cancelled"
+        ? "This run stopped before a complete comparison was ready."
+        : run.status === "lost"
+          ? "The agent lost contact with the hub. The run picks up where it left off when the agent returns."
+          : "We're still grading the prompts. No winner yet.";
   const decision = b?.cmp.checks.find((c) => c.id === "decision_correct");
   if (complete && !b.gate.pass) {
-    const lost =
+    const lostN =
       decision && decision.delta < 0
-        ? `${decision.baseline.passed - decision.candidate.passed} fewer decisions right`
-        : undefined;
-    sentence = lost
-      ? `Keep the ${current}: the ${next} got ${lost}.`
-      : `Keep the ${current}: with the ${next}, ${result}, but it didn't meet the shipping rules.`;
+        ? decision.baseline.passed - decision.candidate.passed
+        : 0;
+    sentence =
+      lostN > 0
+        ? `Keep the ${current}: the ${next} got ${lostN} fewer ${lostN === 1 ? "decision" : "decisions"} right.`
+        : `Keep the ${current}: with the ${next}, ${result}, but it didn't meet the shipping rules.`;
+  } else if (complete && b.gate.pass && delta < 0) {
+    sentence = `The ${next} stayed close enough to the ${current} to ship: ${result}, within the drop the suite allows.`;
   }
   const metric = (value: string, label: string, meaning: string) =>
     `<div><div class="n mono">${value}</div><b>${label}</b><p>${meaning}</p></div>`;
@@ -182,10 +189,12 @@ function pairedRows(b: Built) {
 
 export function changedCases(b: Built, base: string): string {
   const rows = pairedRows(b);
+  const passesAll = (line: (typeof rows)[number]["after"]) =>
+    line.ok && b.meta.checks.every((c) => line.checks[c.id] !== false);
   const fixed = rows.filter(
     ({ before, after }) =>
       after.ok &&
-      (!before.ok ||
+      ((!before.ok && passesAll(after)) ||
         b.meta.checks.some(
           (c) => before.checks[c.id] === false && after.checks[c.id] === true,
         )),
@@ -202,7 +211,7 @@ export function changedCases(b: Built, base: string): string {
     items
       .map(({ id }) => `<a href="${esc(caseUrl(base, id))}">${esc(id)}</a>`)
       .join(", ") || "None.";
-  return `<section><div class="sec-head"><h2 class="display">What changed, in words</h2><p><b>${fixed.length} cases fixed. ${broken.length} cases broke.</b><br>A case counts once in each group if any check changed. A case can have both a fix and a break; an unanswered check doesn't count as either.</p></div>
+  return `<section><div class="sec-head"><h2 class="display">What changed, in words</h2><p><b>${fixed.length} ${fixed.length === 1 ? "case" : "cases"} fixed. ${broken.length} ${broken.length === 1 ? "case" : "cases"} broke.</b><br>A case counts once in each group if any check changed. A case can have both a fix and a break; an unanswered check doesn't count as either.</p></div>
 <p>Fixed: ${links(fixed)}</p><p>Broke: ${links(broken)}</p>${broken.length ? `<p>A case that got worse ${tag("regression", "A check passed with the current prompt and failed with the new prompt")}; open it to see which check changed.</p>` : ""}</section>`;
 }
 

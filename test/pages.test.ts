@@ -60,6 +60,7 @@ describe("hub pages", () => {
     const html = runPage(project, run, b);
     expect(html).toContain('data-section="verdict"');
     expect(html).toContain("Ship it");
+    expect(html).toContain('data-ship="true"');
     expect(html).toContain("more cases passed every check");
     expect(html).toContain("Decisions right");
     expect(html).toContain("Cost per case");
@@ -69,6 +70,8 @@ describe("hub pages", () => {
   test("a failed comparison says not to ship and names the loss", () => {
     const html = runPage(project, run, build(example, { baseline: "v1" }));
     expect(html.includes("Don't ship")).toBe(true);
+    expect(html.includes("Ship it")).toBe(false);
+    expect(html.includes('data-ship="false"')).toBe(true);
     expect(html.includes("Keep the current prompt")).toBe(true);
     expect(html.includes("4 fewer decisions right")).toBe(true);
   });
@@ -92,12 +95,36 @@ describe("hub pages", () => {
     }
   });
 
+  test("a finished run on a case subset still gets a verdict, and a lost run says so", () => {
+    const lines = readFileSync(join(example, "traces.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    const ids = new Set(b.meta.case_order.slice(0, 10));
+    const subset = buildFrom(
+      b.meta,
+      lines.filter((l) => ids.has(l.case_id)),
+      b.judges,
+    );
+    const html = runPage(project, { ...run, finished: 40, total: 40 }, subset);
+    expect(html.includes('data-complete="true"')).toBe(true);
+    expect(html.includes("still grading")).toBe(false);
+    expect(/Ship it|Don't ship/.test(html)).toBe(true);
+    const lost = runPage(project, { ...run, status: "lost", finished: 40 }, b);
+    expect(
+      lost.includes("Lost contact with the agent after 40 of 108 cases."),
+    ).toBe(true);
+    expect(lost.includes("Don't ship yet")).toBe(true);
+    expect(lost.includes("Grading case")).toBe(false);
+    expect(lost.includes('data-live="true"')).toBe(true);
+  });
+
   test("plain sections keep case links, checked graders, details and all measurements", () => {
     const html = runPage(project, run, b);
     for (const copy of [
       "What changed, in words",
       "cases fixed.",
-      "cases broke.",
+      "case broke.",
       "What we grade",
       "Every case",
       "Wrong decision",
