@@ -167,6 +167,15 @@ describe("hub", () => {
     expect(types.filter((t) => t === "job_done")).toHaveLength(108);
     expect(types).toContain("run_done");
     expect(types).toContain("summary");
+    for (const frame of sse.split("\n\n")) {
+      if (!/^event: summary$/m.test(frame)) continue;
+      const payload: Record<string, unknown> = JSON.parse(
+        frame.match(/^data: (.+)$/m)![1]!,
+      );
+      expect(payload).not.toHaveProperty("html");
+      for (const key of ["cmp", "gate", "paired_n"])
+        expect(payload).toHaveProperty(key);
+    }
     expect(types.at(-1)).toBe("end");
     const ids = [...sse.matchAll(/^id: (\d+)/gm)].map((m) => Number(m[1]));
     expect(ids).toEqual(ids.map((_, i) => i + 1));

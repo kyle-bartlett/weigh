@@ -152,8 +152,8 @@ function transitionTable(lines: TraceLine[], variant: string) {
 }
 
 /**
- * The report is a sequence of fragments so the hub's pages and its live summary events can reuse each
- * one. Every fragment takes the same ReportInput the whole report takes.
+ * The report is a sequence of fragments so the static report and the hub can reuse each one.
+ * Every fragment takes the same ReportInput the whole report takes.
  */
 
 /** What every fragment needs: the paired variants, the case order both completed, the token delta. */

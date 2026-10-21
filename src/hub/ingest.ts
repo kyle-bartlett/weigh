@@ -1,6 +1,5 @@
 import { parseEvent, type RunEvent, type RunStatus } from "../events.ts";
-import { buildFrom, type Built } from "../report/build.ts";
-import { checksTable, proofStrip, verdictBand } from "../report/html.ts";
+import { buildFrom } from "../report/build.ts";
 import { scrub } from "../scrub.ts";
 import type { Store, StoredEvent, Summary } from "./store.ts";
 import type { Streams } from "./stream.ts";
@@ -138,17 +137,10 @@ export function summarize(store: Store, key: string): StoredEvent | undefined {
     gate: built.gate,
     noise: built.noise,
     paired_n: summary.paired_n,
-    html: fragments(built),
     seq: 1,
     at: summary.at,
   });
 }
-
-export const fragments = (b: Built) => ({
-  verdict: verdictBand(b),
-  proof: proofStrip(b),
-  checks: checksTable(b),
-});
 
 export class HttpError extends Error {
   constructor(

@@ -65,8 +65,6 @@ export type HubEvent =
       gate: GateResult;
       noise?: NoiseFloor;
       paired_n: number;
-      /** Pre-rendered fragments so the browser never formats a number. */
-      html?: { verdict: string; proof: string; checks: string };
     })
   | (Base & { type: "status"; status: RunStatus; agent_id?: string });
 
@@ -156,9 +154,6 @@ export const RunEventSchema: z.ZodType<RunEvent> = z.discriminatedUnion(
       gate: z.looseObject({ pass: z.boolean(), reasons: z.array(z.string()) }),
       noise: fn.optional(),
       paired_n: z.number().int().min(0),
-      html: z
-        .object({ verdict: z.string(), proof: z.string(), checks: z.string() })
-        .optional(),
     }),
     z.object({
       ...base,
