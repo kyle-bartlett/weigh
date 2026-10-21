@@ -109,9 +109,12 @@ export function startHub(o: HubOptions) {
     body: string,
     status = 200,
     extra: Record<string, string> = {},
+    track = false,
   ) => {
     const security = { ...SECURITY };
-    if (analyticsSite && status >= 200 && status < 300)
+    // Only public reader pages opt in. Owner pages and private projects never load the tracker.
+    const site = track ? analyticsSite : undefined;
+    if (site && status >= 200 && status < 300)
       security["content-security-policy"] = security["content-security-policy"]
         .replace(
           "script-src 'self';",
@@ -119,9 +122,9 @@ export function startHub(o: HubOptions) {
         )
         .replace(
           "connect-src 'self';",
-          "connect-src 'self' https://www.staats.ai;",
+          "connect-src 'self' https://api.staats.ai;",
         );
-    return new Response(withAnalytics(body, analyticsSite, status), {
+    return new Response(withAnalytics(body, site, status), {
       status,
       headers: {
         "content-type": "text/html; charset=utf-8",
@@ -288,6 +291,9 @@ export function startHub(o: HubOptions) {
           generatedAt: now(),
           includePrivate: c.scopes.has("read"),
         }),
+        200,
+        {},
+        true,
       ),
     ),
     route("GET", "/p/:project", (c) => {
@@ -299,6 +305,9 @@ export function startHub(o: HubOptions) {
           store.listRuns({ project: p.id, limit: 100 }),
           { admin: c.scopes.has("admin"), generatedAt: now(), store },
         ),
+        200,
+        {},
+        p.public,
       );
     }),
     route("GET", "/r/:suite/:run", (c) => {
@@ -310,6 +319,9 @@ export function startHub(o: HubOptions) {
           generatedAt: now(),
           origin: publicOrigin(c.req, c.url, configuredOrigin),
         }),
+        200,
+        {},
+        project.public,
       );
     }),
     route("GET", "/r/:suite/:run/og\\.png", (c) => {
@@ -406,6 +418,9 @@ export function startHub(o: HubOptions) {
         casePage(project, run, id, store.inputs(run.key)[id], lines, outputs, {
           generatedAt: now(),
         }),
+        200,
+        {},
+        project.public,
       );
     }),
 

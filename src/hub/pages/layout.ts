@@ -11,8 +11,9 @@ export const HUB_CSS = `
 .phone-ready{overflow-wrap:anywhere}
 .phone-ready .cards{grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))}
 .phone-ready .card .row{flex-wrap:wrap}
-.phone-ready a,.phone-ready button,.phone-ready select,.phone-ready summary{min-height:44px;min-width:44px;max-width:100%}
-.phone-ready a{display:inline-flex;align-items:center}.phone-ready a.card{display:block}
+.phone-ready button,.phone-ready select,.phone-ready summary{min-height:44px;min-width:44px;max-width:100%}
+.phone-ready a{max-width:100%}
+@media(pointer:coarse){.phone-ready a:not(.btn):not(.card){padding-block:10px}}
 .phone-ready summary{padding-block:10px;cursor:pointer}
 .phone-ready .comparison-picker label{min-width:0;max-width:100%}
 .phone-ready .table-scroll{min-width:0}
@@ -75,12 +76,24 @@ input.txt{font:inherit;font-size:14px;padding:7px 10px;border:1px solid var(--li
 .run-page .tag{text-transform:none;letter-spacing:0}.run-page h1 .tag{font-size:.4em}
 @media(prefers-reduced-motion:reduce){.status.running i,tr.live-new td{animation:none}.progress i{transition:none}}
 @media(max-width:600px){.check-row{grid-template-columns:1fr;gap:0}.check-counts{display:block}.case-table thead{display:none}.case-table,.case-table tbody,.case-table tr,.case-table td{display:block;width:100%}.case-table tr{border-top:1px solid var(--line);padding:12px 0}.case-table td{border:0;padding:5px 0}.case-table td[data-label]::before{content:attr(data-label);display:block;font-size:12px;color:var(--ink3);font-weight:400}.run-page .sec-head{gap:12px}}
+@media(max-width:600px){.runs-table thead{display:none}.runs-table,.runs-table tbody,.runs-table tr,.runs-table td{display:block;width:100%}.runs-table tr{border-top:1px solid var(--line);padding:12px 0}.runs-table td{border:0;padding:5px 0;text-align:left}.runs-table td[data-label]::before{content:attr(data-label);display:block;font-size:12px;color:var(--ink3);font-weight:400}}
 @media(max-width:600px){.verdict-numbers{gap:12px;grid-template-columns:1fr;padding:12px 0}.verdict-numbers>div{display:grid;grid-template-columns:116px 1fr;column-gap:10px}.verdict-numbers .n{grid-row:1/3;font-size:23px;margin:0}.verdict-numbers p{margin-top:2px}.verdict-card h1{font-size:28px}.verdict-card{padding-top:16px}.ship{margin:10px 0 12px}}
 `;
 
-/** Read once by startHub. An empty deploy-time code disables all tracking. */
-export const readAnalyticsSite = (value = process.env.WEIGH_ANALYTICS_SITE) =>
-  value?.trim() || undefined;
+/**
+ * Read once by startHub. Empty disables tracking. s.js drops any code that is not 18 hex
+ * characters without a word, so a malformed one is refused here with a warning instead of
+ * relaxing the CSP for a tracker that records nothing.
+ */
+export const readAnalyticsSite = (value = process.env.WEIGH_ANALYTICS_SITE) => {
+  const site = value?.trim();
+  if (!site) return undefined;
+  if (/^[0-9a-f]{18}$/.test(site)) return site;
+  console.warn(
+    "weigh hub: WEIGH_ANALYTICS_SITE is not an 18-character hex site code; analytics stay off",
+  );
+  return undefined;
+};
 
 /** Shared head decoration at the HTML response boundary keeps error pages untracked. */
 export function withAnalytics(

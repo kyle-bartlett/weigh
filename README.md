@@ -229,9 +229,12 @@ An empty value counts as unset. Any other invalid value is ignored with one star
 warning. When valid, it takes precedence over the Host header; when unset, the existing
 Host and `X-Forwarded-Proto` behavior stays.
 
-Set optional `WEIGH_ANALYTICS_SITE=<site code>` on the hub to enable staats.
-The hub reads the code once at startup; unset or whitespace-only disables tracking.
-The script is included only on successful HTML pages, never on error pages.
+Set optional `WEIGH_ANALYTICS_SITE=<site code>` on the hub to enable staats. The code
+is the 18-character hex id from the staats script tag; anything else is ignored with one
+startup warning. The hub reads it once at startup; unset or whitespace-only disables
+tracking. The script loads only on the landing, project, run and case pages of public
+projects, never on owner pages or error pages. staats itself skips localhost, 127.0.0.1
+and `*.local`, so a hub on this machine sends nothing.
 Events: `verdict_viewed` when the run verdict enters the viewport (once per page
 view), `case_opened` when a case page opens or its drawer expands,
 `engineers_opened` when For engineers expands, and `copy_summary` when Copy summary

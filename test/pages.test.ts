@@ -132,7 +132,12 @@ describe("hub pages", () => {
 
   test("project runs reuse the run verdict for complete, pending and missing comparisons", () => {
     const store = landingStore();
-    const pending = { ...run, run_id: "pending", status: "queued" as const };
+    const pending = {
+      ...run,
+      key: "pending",
+      run_id: "pending",
+      status: "queued" as const,
+    };
     const missing = {
       ...run,
       key: "missing",
@@ -148,6 +153,17 @@ describe("hub pages", () => {
       expect(html).toContain(plainSummary(verdictSummary(r, built).sentence));
     expect(html).not.toContain("<th>status</th>");
     expect(html).toContain('aria-label="Runs"');
+    expect(html).toContain('data-label="Verdict"');
+    // The second render of the same snapshot must not reread traces.
+    const traces = store.traces.bind(store);
+    let reads = 0;
+    store.traces = (key: string) => (reads++, traces(key));
+    projectPage(project, [], [run, pending, missing], { store });
+    expect(reads).toBe(0);
+    projectPage(project, [], [{ ...run, last_seq: run.last_seq + 1 }], {
+      store,
+    });
+    expect(reads).toBe(1);
     store.db.close();
   });
 

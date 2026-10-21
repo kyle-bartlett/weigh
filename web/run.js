@@ -8,10 +8,12 @@ const $ = (s) => document.querySelector(s);
 // "lost" is not terminal: the hub lets an agent claim a lost run again, so the stream stays open.
 const terminal = new Set(["finished", "failed", "cancelled"]);
 const openEngineers = () => {
-  if (location.hash === "#engineers") {
-    const drawer = $("#engineers");
-    if (drawer) drawer.open = true;
-  }
+  if (location.hash !== "#engineers") return;
+  const drawer = $("#engineers");
+  if (!drawer || drawer.open) return;
+  // A deep link opens the drawer for the reader; it is not a click worth counting.
+  drawer.dataset.analyticsRestored = "";
+  drawer.open = true;
 };
 openEngineers();
 window.addEventListener("hashchange", openEngineers);

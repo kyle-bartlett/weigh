@@ -506,7 +506,8 @@ const checks: Check[] = [
 const suite: Suite = {
   name: "exchange-triage",
   // v1/v2 counts: construction_canonical=false in the committed example traces.
-  // v3 incident: prompt history above. v4 follow-ups: approved v5 design, Project page.
+  // v3 incident: prompt history above. v4 to v6: measured on runs 2026-10-20-v4, -v5 and -v6
+  // (see exchange-triage/prompts/extraction.v5.ts and v6.ts headers, evals/STRATEGY.md F1).
   timeline: [
     {
       version: "v1",
@@ -530,6 +531,18 @@ const suite: Suite = {
       headline:
         "Bare-masonry submissions stopped triggering unnecessary follow-ups.",
       number: "4 follow-ups fixed",
+    },
+    {
+      version: "v5",
+      headline:
+        "Expiring premiums and quoted ranges stopped being read as the target.",
+      number: "2 regressions fixed",
+    },
+    {
+      version: "v6",
+      headline:
+        "Per-unit target rates count again, and v6 became the production prompt.",
+      number: "27 of 27 decisions right",
     },
   ],
   description:

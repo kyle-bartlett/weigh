@@ -73,6 +73,28 @@ function safeBuild(store: Store, run: Run, judges: JudgeRecord[]) {
   }
 }
 
+/**
+ * A sentence needs the run's traces. The list shows up to 100 runs on a public route, so each
+ * sentence is kept per run snapshot (same key as the share image) instead of rebuilt per view.
+ */
+const sentences = new WeakMap<
+  Store,
+  Map<string, { snapshot: string; sentence: string }>
+>();
+function runSentence(store: Store | undefined, r: Run): string {
+  if (!store) return plainSummary(verdictSummary(r, undefined).sentence);
+  let cache = sentences.get(store);
+  if (!cache) sentences.set(store, (cache = new Map()));
+  const snapshot = JSON.stringify([r.last_seq, r.status]);
+  const hit = cache.get(r.key);
+  if (hit?.snapshot === snapshot) return hit.sentence;
+  const built = safeBuild(store, r, store.judges(r.key));
+  const sentence = plainSummary(verdictSummary(r, built).sentence);
+  if (cache.size >= 1000) cache.clear();
+  cache.set(r.key, { snapshot, sentence });
+  return sentence;
+}
+
 export function projectPage(
   project: Project,
   suites: SuiteRow[],
@@ -81,18 +103,15 @@ export function projectPage(
 ): string {
   const rows = runs
     .map((r) => {
-      const built = opts.store
-        ? safeBuild(opts.store, r, opts.store.judges(r.key))
-        : undefined;
-      const sentence = plainSummary(verdictSummary(r, built).sentence);
-      return `<tr><td class="mono"><a href="/r/${esc(encodeURIComponent(r.suite))}/${esc(encodeURIComponent(r.run_id))}">${esc(r.run_id)}</a></td><td class="mono">${esc(r.suite)}</td><td>${esc(sentence)}</td><td class="num">${when(r.requested_at)}</td></tr>`;
+      const sentence = runSentence(opts.store, r);
+      return `<tr><td class="mono" data-label="Run"><a href="/r/${esc(encodeURIComponent(r.suite))}/${esc(encodeURIComponent(r.run_id))}">${esc(r.run_id)}</a></td><td class="mono" data-label="Suite">${esc(r.suite)}</td><td data-label="Verdict">${esc(sentence)}</td><td class="num" data-label="Requested">${when(r.requested_at)}</td></tr>`;
     })
     .join("");
   const timelines = suites
     .map((suite) => {
       const parsed = timelineSchema.safeParse(suite.info.timeline);
       if (!parsed.success || !parsed.data.length) return "";
-      return `<section aria-label="Version timeline"><h2 class="display">Version timeline</h2><p>${landingText(suite.name)}</p><ol class="version-timeline">${parsed.data.map((step) => `<li><h3>${landingText(step.version)}</h3><p>${landingText(step.headline)}</p><p class="mono">${landingText(step.number)}</p></li>`).join("")}</ol></section>`;
+      return `<section aria-label="Version timeline"><h2 class="display">Version timeline${suites.length > 1 ? `: ${landingText(suite.name)}` : ""}</h2><p>What each version changed, and the number that showed it.</p><ol class="version-timeline">${parsed.data.map((step) => `<li><h3>${landingText(step.version)}</h3><p>${landingText(step.headline)}</p><p class="mono">${landingText(step.number)}</p></li>`).join("")}</ol></section>`;
     })
     .join("");
   const suiteList = suites.length
@@ -112,7 +131,7 @@ export function projectPage(
 ${timelines}
 <section style="padding-top:0;border-top:0"><div class="sec-head"><h2 class="display">Suites</h2><p>A suite names its cases, its variants and its binary checks. The baseline and candidate it declares are what the gate compares.</p></div><div class="cards" style="margin-top:0">${suiteList}</div></section>
 <section><div class="sec-head"><h2 class="display">Runs</h2><p>Newest first. A running row fills in live on its own page.</p></div>
-${rows ? `<div class="table-scroll" role="region" aria-label="Runs" tabindex="0"><table><thead><tr><th>Run</th><th>Suite</th><th>Verdict</th><th class="num">Requested</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="empty">No runs yet.</p>'}</section></main>`;
+${rows ? `<table class="runs-table" aria-label="Runs"><thead><tr><th>Run</th><th>Suite</th><th>Verdict</th><th class="num">Requested</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="empty">No runs yet.</p>'}</section></main>`;
   return page({
     title: `${project.name} · Weigh`,
     body,

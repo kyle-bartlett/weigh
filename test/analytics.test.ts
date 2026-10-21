@@ -4,6 +4,21 @@ import { runInNewContext } from "node:vm";
 import { withAnalytics, readAnalyticsSite } from "../src/hub/pages/layout.ts";
 import { startHub } from "../src/hub/server.ts";
 
+/** The shape s.js accepts; anything else is dropped silently by the tracker. */
+const SITE = "0123456789abcdef01";
+
+test("a malformed site code is refused with one warning", () => {
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(readAnalyticsSite("demo")).toBeUndefined();
+    expect(readAnalyticsSite(" ")).toBeUndefined();
+    expect(readAnalyticsSite(` ${SITE} `)).toBe(SITE);
+    expect(warn).toHaveBeenCalledTimes(1);
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 test("hub snapshots the analytics setting and allows its origin only on successful tracked HTML", async () => {
   const previous = process.env.WEIGH_ANALYTICS_SITE;
   const server = {
@@ -18,7 +33,7 @@ test("hub snapshots the analytics setting and allows its origin only on successf
     return server as any;
   });
   try {
-    for (const site of ["", "demo"]) {
+    for (const site of ["", "demo", SITE]) {
       process.env.WEIGH_ANALYTICS_SITE = site;
       const hub = startHub({ dbPath: ":memory:", tokens: {} });
       process.env.WEIGH_ANALYTICS_SITE = "changed";
@@ -34,13 +49,14 @@ test("hub snapshots the analytics setting and allows its origin only on successf
           expect(response.status).toBe(status);
           const html = await response.text();
           const policy = response.headers.get("content-security-policy")!;
-          if (site && status === 200) {
-            expect(html).toContain('data-site="demo"');
+          if (site === SITE && status === 200) {
+            expect(html).toContain(`data-site="${SITE}"`);
             expect(policy).toContain(
               "script-src 'self' https://www.staats.ai;",
             );
+            // s.js posts to the ingest host, so that is the origin connect-src must allow.
             expect(policy).toContain(
-              "connect-src 'self' https://www.staats.ai;",
+              "connect-src 'self' https://api.staats.ai;",
             );
           } else {
             expect(html).not.toContain("staats.ai");
@@ -61,7 +77,6 @@ test("hub snapshots the analytics setting and allows its origin only on successf
 test("analytics head is opt-in, escaped, and absent on every error response", () => {
   const html = "<html><head></head><body></body></html>";
   expect(readAnalyticsSite("  ")).toBeUndefined();
-  expect(readAnalyticsSite(" demo ")).toBe("demo");
   expect(withAnalytics(html, undefined)).toBe(html);
   expect(withAnalytics(html, "")).toBe(html);
   expect(withAnalytics(html, 'x"<')).toContain('data-site="x&quot;&lt;"');
