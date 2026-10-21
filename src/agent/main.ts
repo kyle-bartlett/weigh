@@ -45,7 +45,11 @@ export function agentEnv(
 
 export async function startAgent(
   configPath: string,
-  opts: { once?: boolean; log?: (s: string) => void } = {},
+  opts: {
+    once?: boolean;
+    retryDelayMs?: number;
+    log?: (s: string) => void;
+  } = {},
 ) {
   const c = loadConfig(configPath);
   const print =
@@ -71,34 +75,65 @@ export async function startAgent(
     };
   const log = agentLog();
 
-  // Register: checkouts current, suites discovered, hub told.
-  const registered: {
+  type ProjectEntry = {
     id: string;
     suites: ReturnType<typeof discoverSuites>["suites"];
-  }[] = [];
-  for (const p of c.projects) {
-    try {
-      const dir = ensureCheckout(c, p, log, { ...env, ...p.env });
-      const { suites, errors } = discoverSuites(dir, c.weigh_home, {
-        ...env,
-        ...p.env,
-      });
-      for (const e of errors) log("warn", `${p.id}/${e.path}: ${e.error}`);
-      log(
-        "info",
-        `${p.id} @ ${headSha(dir, env) ?? "no git"}: ${suites.map((s) => s.name).join(", ") || "no suites"}`,
-      );
-      registered.push({ id: p.id, suites });
-    } catch (e) {
-      log("error", `${p.id}: ${String(e instanceof Error ? e.message : e)}`);
+  };
+  const lastGood = new Map<string, ProjectEntry>();
+
+  // Startup and every re-register share this path (issue #20). The re-register path used to swallow
+  // the register POST's outcome and log nothing, so during a hub rollout a failed POST (or one that
+  // reached an instance not serving claims) was invisible and looked like the agent never re-registered.
+  // It also dropped any project whose checkout failed, which could post an empty project list.
+  function discoverProjects(): ProjectEntry[] {
+    const projects: ProjectEntry[] = [];
+    for (const p of c.projects) {
+      try {
+        const dir = ensureCheckout(c, p, log, { ...env, ...p.env });
+        const { suites, errors } = discoverSuites(dir, c.weigh_home, {
+          ...env,
+          ...p.env,
+        });
+        for (const e of errors) log("warn", `${p.id}/${e.path}: ${e.error}`);
+        log(
+          "info",
+          `${p.id} @ ${headSha(dir, env) ?? "no git"}: ${suites.map((s) => s.name).join(", ") || "no suites"}`,
+        );
+        const entry: ProjectEntry = { id: p.id, suites };
+        lastGood.set(p.id, entry);
+        projects.push(entry);
+      } catch (e) {
+        const msg = String(e instanceof Error ? e.message : e).slice(0, 200);
+        const previous = lastGood.get(p.id);
+        if (previous) {
+          log("warn", `${p.id}: ${msg}; keeping its previous registration`);
+          projects.push(previous);
+        } else {
+          log("error", `${p.id}: ${msg}`);
+        }
+      }
     }
+    return projects;
   }
-  await hub.register({
-    agent_id: c.agent_id,
-    version: AGENT_VERSION,
-    projects: registered,
-  });
-  log("info", `registered ${registered.length} project(s) with ${c.hub}`);
+
+  async function registerProjects(projects: ProjectEntry[]): Promise<boolean> {
+    if (projects.length === 0) {
+      log(
+        "warn",
+        "register skipped: no project could be checked out or discovered; retrying on the next loop",
+      );
+      return false;
+    }
+    await hub.register({
+      agent_id: c.agent_id,
+      version: AGENT_VERSION,
+      projects,
+    });
+    log("info", `registered ${projects.length} project(s) with ${c.hub}`);
+    return true;
+  }
+
+  let needRegister = !(await registerProjects(discoverProjects()));
 
   // Recovery sweep: any run dir with a cursor that never reached done.
   if (existsSync(c.runs_dir))
@@ -144,30 +179,19 @@ export async function startAgent(
   let idle = 0;
   for (;;) {
     let job: Job | undefined;
-    if (idle >= REREGISTER_EVERY) {
-      idle = 0;
-      const again: typeof registered = [];
-      for (const p of c.projects)
-        try {
-          const dir = ensureCheckout(c, p, log, { ...env, ...p.env });
-          again.push({
-            id: p.id,
-            suites: discoverSuites(dir, c.weigh_home, { ...env, ...p.env })
-              .suites,
-          });
-        } catch (e) {
-          log(
-            "warn",
-            `${p.id}: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`,
-          );
+    if (needRegister || idle >= REREGISTER_EVERY) {
+      needRegister = true;
+      try {
+        if (await registerProjects(discoverProjects())) {
+          needRegister = false;
+          idle = 0;
         }
-      await hub
-        .register({
-          agent_id: c.agent_id,
-          version: AGENT_VERSION,
-          projects: again,
-        })
-        .catch(() => {});
+      } catch (e) {
+        log(
+          "warn",
+          `register: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`,
+        );
+      }
     }
     try {
       job = await hub.claim(c.agent_id, c.poll_wait_s);
@@ -175,8 +199,8 @@ export async function startAgent(
       const msg = String(e instanceof Error ? e.message : e);
       log("warn", `claim: ${msg.slice(0, 200)}`);
       // A redeployed hub forgot this agent: register again on the next loop instead of waiting it out.
-      if (msg.includes("register first")) idle = REREGISTER_EVERY;
-      await Bun.sleep(5000);
+      if (msg.includes("register first")) needRegister = true;
+      await Bun.sleep(opts.retryDelayMs ?? 5000);
       continue;
     }
     if (!job) idle++;
