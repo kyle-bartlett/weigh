@@ -81,8 +81,10 @@ const snapshotOf = (r: Run): string => JSON.stringify([r.last_seq, r.status]);
 
 /**
  * `/` is the most visited public URL, and building the featured comparison rereads every trace.
- * Keep the build per run snapshot, using the same key as the sentence cache.
+ * Keep the build per run snapshot, using the same key as the sentence cache. Only the current
+ * latest run is ever read again, and a Built holds every trace line, so the cap stays small.
  */
+const FEATURED_CACHE_MAX = 4;
 const featuredBuilds = new WeakMap<
   Store,
   Map<string, { snapshot: string; built: Built | undefined }>
@@ -98,7 +100,7 @@ function featuredBuild(
   const hit = cache.get(run.key);
   if (hit?.snapshot === snapshot) return hit.built;
   const built = safeBuild(store, run, judges);
-  if (cache.size >= 1000) cache.clear();
+  if (cache.size >= FEATURED_CACHE_MAX) cache.clear();
   cache.set(run.key, { snapshot, built });
   return built;
 }
