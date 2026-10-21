@@ -582,6 +582,12 @@ export function startHub(o: HubOptions) {
         )?.checks[check];
         return v === undefined ? undefined : v ? "pass" : "fail";
       });
+      // A record that joined nothing would render as a validated grader with an empty table.
+      if (result.joined === 0)
+        throw new HttpError(
+          409,
+          `no label matched a verdict of ${check}; nothing stored`,
+        );
       const record = {
         ...result,
         check,
@@ -591,6 +597,16 @@ export function startHub(o: HubOptions) {
       store.putJudges(run.key, [record]);
       ingestSummary(run.key);
       return json(record);
+    }),
+    route("DELETE", "/api/runs/:suite/:run/judges/:check", (c) => {
+      need(c, "admin");
+      const run = agentRun(c);
+      const removed = store.deleteJudge(
+        run.key,
+        decodeURIComponent(c.params.check!),
+      );
+      ingestSummary(run.key);
+      return json({ ok: true, removed });
     }),
 
     // MCP: JSON-RPC over POST, read scope by bearer or by path token

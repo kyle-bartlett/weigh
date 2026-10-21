@@ -453,6 +453,13 @@ export class Store {
       for (const j of records) stmt.run(key, j.check, JSON.stringify(j), j.at);
     })();
   }
+  /** Removes one check's judge record; returns how many rows went (0 or 1). */
+  deleteJudge(key: string, check: string): number {
+    return this.db.run(
+      "DELETE FROM judges WHERE run_key = ? AND check_id = ?",
+      [key, check],
+    ).changes;
+  }
   judges(key: string): JudgeRecord[] {
     return (
       this.db

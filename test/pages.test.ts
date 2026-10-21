@@ -693,6 +693,25 @@ describe("hub pages", () => {
     expect(html).not.toMatch(/\d\+|[—–]/);
   });
 
+  test("a judge record that joined no labels renders no grader section and counts as unvalidated", () => {
+    const jev = b.judges.find((j) => j.check === "attribution_jev")!;
+    const empty = {
+      ...jev,
+      joined: 0,
+      unmatched: 54,
+      splits: [{ ...jev.splits[0]!, split: "all", n: 0 }],
+    };
+    const others = b.judges.filter((j) => j.check !== "attribution_jev");
+    const f = runFragments(run, buildFrom(b.meta, b.lines, [...others, empty]));
+    expect(f.engineers.match(/Checking the AI grader/g)).toHaveLength(
+      others.length,
+    );
+    expect(f.engineers).not.toContain("0 human answers matched");
+    expect(f.checks).toContain("without human validation recorded");
+    // The raw JSON keeps every stored record.
+    expect(f.engineers).toContain("&quot;unmatched&quot;: 54");
+  });
+
   test("live fragments retain unpaired rows and explain unanswered checks without claiming validation", () => {
     const before = {
       ...b.lines.find((l) => l.variant === b.meta.baseline)!,

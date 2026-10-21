@@ -258,3 +258,73 @@ describe("hub", () => {
     expect((await get("/healthz")).status).toBe(200);
   });
 });
+
+describe("hub judge records", () => {
+  let hub: ReturnType<typeof startHub>;
+  const runPath = "/api/runs/exchange-triage/2026-10-19-prompts";
+  beforeAll(async () => {
+    hub = startHub({
+      port: 0,
+      dbPath: join(mkdtempSync(join(tmpdir(), "weigh-hub-")), "hub.db"),
+      tokens: T,
+    });
+    await importRunDir(new HubClient(hub.url, T.agent), example, {
+      project: "exchange-triage",
+    });
+  });
+  afterAll(() => hub.stop());
+
+  const call = (method: string, path: string, body?: unknown) =>
+    fetch(hub.url + runPath + path, {
+      method,
+      headers: {
+        authorization: `Bearer ${T.admin}`,
+        "content-type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const judges = async () =>
+    (
+      (await (await call("GET", "/summary")).json()) as {
+        judges: { check: string; joined: number }[];
+      }
+    ).judges;
+
+  test("validate refuses a check no label joined and keeps the stored record", async () => {
+    const before = await judges();
+    expect(before.find((j) => j.check === "attribution_jev")?.joined).toBe(54);
+    // A label on a variant with no trace has no verdict to join, like an all-unanswered judge.
+    const put = await call("PUT", "/labels", {
+      labels: [{ case_id: "GOLD-01", variant: "absent", human: "pass" }],
+    });
+    expect(put.status).toBe(200);
+    const v = await call("POST", "/judges/validate", {
+      check: "attribution_jev",
+    });
+    expect(v.status).toBe(409);
+    expect(await v.text()).toContain("attribution_jev");
+    expect(await judges()).toEqual(before);
+  });
+
+  test("DELETE removes one judge record, then reports nothing left to remove", async () => {
+    const del = await call("DELETE", "/judges/attribution_jev");
+    expect(del.status).toBe(200);
+    expect(await del.json()).toEqual({ ok: true, removed: 1 });
+    expect((await judges()).map((j) => j.check)).toEqual([
+      "attribution_claude",
+    ]);
+    const again = await call("DELETE", "/judges/attribution_jev");
+    expect(await again.json()).toEqual({ ok: true, removed: 0 });
+    const asRead = await fetch(
+      hub.url + runPath + "/judges/attribution_claude",
+      {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${T.read}` },
+      },
+    );
+    expect(asRead.status).toBe(401);
+    expect((await judges()).map((j) => j.check)).toEqual([
+      "attribution_claude",
+    ]);
+  });
+});

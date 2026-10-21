@@ -280,8 +280,11 @@ export function changedCases(
 <p>${changedSentence(b, suiteBaseline)}</p><p>Fixed: ${links(fixed)}</p><p>Broke: ${links(broken)}</p>${broken.length ? `<p>A case that got worse ${tag("regression", "A check passed with the current prompt and failed with the new prompt")}; open it to see which check changed.</p>` : ""}</section>`;
 }
 
+// A record that joined no human label validated nothing; only the raw JSON keeps it.
+const checkedJudges = (b: Built) => b.judges.filter((j) => j.joined > 0);
+
 const grader = (b: Built, id: string) =>
-  b.judges.some((j) => j.check === id)
+  checkedJudges(b).some((j) => j.check === id)
     ? `An AI grader we checked against human answers ${tag("judge", "The human comparison and its test split are in For engineers")}`
     : `An AI grader without human validation recorded ${tag("judge", "Treat this as a review signal until checked against human answers")}`;
 
@@ -367,7 +370,7 @@ export function plainCost(b: Built): string {
 }
 
 function engineerJudges(b: Built): string {
-  return b.judges
+  return checkedJudges(b)
     .map(
       (j) =>
         `<section><h2 class="display">Checking the AI grader</h2><p>${prose(checkName(b, j.check))} ${tag(j.check, "Check identifier")}. ${grader(b, j.check)}.</p><div class="table-scroll"><table><thead><tr><th>Human answer group</th><th>Answers</th><th>Real failures</th><th>Good answers</th><th>Failures caught</th><th>Good answers flagged</th><th>Good answers left alone</th></tr></thead><tbody>${j.splits.map((s) => `<tr><td>${esc(s.split)}</td><td>${s.n}</td><td>${s.humanFails}</td><td>${s.humanPasses}</td><td>Catches ${percent(s.tpr)} of real failures ${tag("TPR", "Share of human-labelled failures caught")}<br>likely range ${ciTag()}: ${range(s.tprCi, (n) => percent(n, 0))}</td><td>Wrongly flags ${percent(1 - s.tnr)} of good answers ${tag("TNR", "False alarms are one minus specificity")}</td><td>${percent(s.tnr)} left alone; likely range ${ciTag()}: ${range(s.tnrCi, (n) => percent(n, 0))}</td></tr>`).join("")}</tbody></table></div><p>${j.joined} human answers matched a grader verdict; ${j.unmatched} did not.</p></section>`,
