@@ -930,7 +930,7 @@ export function startHub(o: HubOptions) {
     development: false,
     idleTimeout: 255,
     fetch: async (req, srv) => {
-      const url = new URL(req.url);
+      const url = new URL(req.url, `http://${srv.hostname}:${srv.port}`);
       const ip =
         req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
         srv.requestIP(req)?.address ||

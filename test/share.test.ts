@@ -1,4 +1,3 @@
-import "./transport.ts";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { startHub } from "../src/hub/server.ts";
 import { join } from "node:path";
