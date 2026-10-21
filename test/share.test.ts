@@ -70,12 +70,13 @@ test("unset and invalid public origins retain proxy behavior with one warning pe
   try {
     delete process.env.WEIGH_PUBLIC_ORIGIN;
     expect(readPublicOrigin()).toBeUndefined();
+    process.env.WEIGH_PUBLIC_ORIGIN = " ";
+    expect(readPublicOrigin()).toBeUndefined();
     expect(warn).not.toHaveBeenCalled();
     expect(publicOrigin(req, new URL(req.url))).toBe(
       "https://preview.example:8443",
     );
     for (const value of [
-      "",
       "/relative",
       "ftp://example.com",
       "https://example.com/path",

@@ -33,6 +33,8 @@ function visit(hash: string, storage: Map<string, string>, width = 1000) {
     remove() {},
   };
   const body = { style: { paddingBottom: "" }, append: mock(() => {}) };
+  const documentElement = { clientWidth: width };
+  const windowCallbacks = new Map<string, () => void>();
   const getItem = mock((key: string) => storage.get(key));
   const setItem = mock((key: string, value: string) => {
     storage.set(key, value);
@@ -40,7 +42,7 @@ function visit(hash: string, storage: Map<string, string>, width = 1000) {
   runInNewContext(script, {
     document: {
       body,
-      documentElement: { clientWidth: width },
+      documentElement,
       querySelector: () => anchor,
       createElement: () => dialog,
       addEventListener: (name: string, fn: () => void) =>
@@ -51,15 +53,33 @@ function visit(hash: string, storage: Map<string, string>, width = 1000) {
       innerHeight: 844,
       getComputedStyle: () => ({ paddingBottom: "0px" }),
       scrollBy,
-      addEventListener() {},
+      addEventListener: (name: string, fn: () => void) =>
+        windowCallbacks.set(name, fn),
       removeEventListener() {},
     },
     localStorage: { getItem, setItem },
-    matchMedia: () => ({ matches: true }),
-    requestAnimationFrame: () => 1,
+    matchMedia: (query: string) => ({
+      matches: query.includes("max-width")
+        ? documentElement.clientWidth <= 640
+        : true,
+    }),
+    requestAnimationFrame: (fn: () => void) => {
+      fn();
+      return 1;
+    },
     cancelAnimationFrame() {},
   });
-  return { dialog, body, callbacks, getItem, setItem, scrollBy, anchor };
+  return {
+    dialog,
+    body,
+    callbacks,
+    windowCallbacks,
+    documentElement,
+    getItem,
+    setItem,
+    scrollBy,
+    anchor,
+  };
 }
 
 test("fragment visits leave first-visit storage untouched, including live completion; a later plain visit starts", () => {
@@ -92,4 +112,18 @@ test("phone tour scrolls its anchor above the sheet, while desktop keeps anchore
   expect(desktop.anchor.scrollIntoView).toHaveBeenCalledTimes(1);
   expect(desktop.scrollBy).not.toHaveBeenCalled();
   expect(desktop.body.style.paddingBottom).toBe("");
+});
+
+test("a height-only resize (phone URL bar) keeps the reader's scroll; a width change re-reveals the anchor", () => {
+  const phone = visit("", new Map(), 390);
+  phone.scrollBy.mockClear();
+  phone.windowCallbacks.get("resize")!();
+  expect(phone.scrollBy).not.toHaveBeenCalled();
+  phone.documentElement.clientWidth = 414;
+  phone.windowCallbacks.get("resize")!();
+  expect(phone.scrollBy).toHaveBeenCalledTimes(1);
+  phone.documentElement.clientWidth = 844;
+  phone.windowCallbacks.get("resize")!();
+  expect(phone.body.style.paddingBottom).toBe("");
+  expect(phone.dialog.style.left).not.toBe("0px");
 });

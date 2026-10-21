@@ -61,6 +61,9 @@ function start() {
   const bodyPadding =
     parseFloat(window.getComputedStyle(document.body).paddingBottom) || 0;
   let mobile = false;
+  // Same breakpoint as tour.css, scrollbar included, so JS and CSS agree.
+  const phone = () => matchMedia("(max-width: 640px)").matches;
+  let lastWidth = document.documentElement.clientWidth;
 
   function position(reveal = false) {
     if (!anchor?.isConnected) return;
@@ -68,7 +71,7 @@ function start() {
     const width = document.documentElement.clientWidth;
     const height = window.innerHeight;
     const box = dialog.getBoundingClientRect();
-    if (width <= 640) {
+    if (phone()) {
       dialog.style.left = "0px";
       dialog.style.top = "auto";
       // Extra scroll room keeps even the last anchor above the sheet.
@@ -96,8 +99,13 @@ function start() {
     frame = requestAnimationFrame(() => position());
   }
   function resize() {
+    // Phone browsers fire resize when the URL bar collapses mid-scroll; only a
+    // width change (rotation, crossing the breakpoint) pulls the anchor back.
+    const width = document.documentElement.clientWidth;
+    const reveal = width !== lastWidth;
+    lastWidth = width;
     cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(() => position(true));
+    frame = requestAnimationFrame(() => position(reveal));
   }
   function close() {
     cancelAnimationFrame(frame);
@@ -129,7 +137,7 @@ function start() {
     back.disabled = index === 0;
     next.textContent = index === available.length - 1 ? "Done" : "Next";
     anchor.classList.add("tour-target");
-    if (document.documentElement.clientWidth > 640)
+    if (!phone())
       anchor.scrollIntoView({
         block: "center",
         behavior: matchMedia("(prefers-reduced-motion: reduce)").matches

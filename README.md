@@ -103,11 +103,11 @@ bun src/cli.ts report reposcout-transcript --candidate full-repeat  # the noise 
 
 Reports and traces are committed under `runs/examples/reposcout-transcript-2026-10-19`.
 
-|                         | full     | jev-filter     | jev-strict     | full-repeat |
-| ----------------------- | -------- | -------------- | -------------- | ----------- |
-| prompt tokens per video | 7,105    | 6,396 (-10.0%) | 5,629 (-20.8%) | same inputs |
-| pass-all                | 42 of 46 | 40 of 46       | 40 of 46       | 40 of 46    |
-| item recall             | 24 of 27 | 21 of 27       | 21 of 27       | 22 of 27    |
+| | full | jev-filter | jev-strict | full-repeat |
+|---|---|---|---|---|
+| prompt tokens per video | 7,105 | 6,396 (-10.0%) | 5,629 (-20.8%) | same inputs |
+| pass-all | 42 of 46 | 40 of 46 | 40 of 46 | 40 of 46 |
+| item recall | 24 of 27 | 21 of 27 | 21 of 27 | 22 of 27 |
 
 Neither filter cleared the gate, so the filter stays off in production. Two things the run taught that a
 token count alone would have hidden:
@@ -154,12 +154,12 @@ bun src/cli.ts judge-validate exchange-triage suites/exchange-triage.labels.json
 Reports, traces, judge validation and the review page are committed under
 `runs/examples/exchange-triage-2026-10-19`.
 
-|                        | v1       | v2       | v3       | v2-repeat |
-| ---------------------- | -------- | -------- | -------- | --------- |
-| fields correct         | 23 of 27 | 26 of 27 | 27 of 27 | 26 of 27  |
-| decision correct       | 27 of 27 | 23 of 27 | 23 of 27 | 23 of 27  |
-| construction canonical | 14 of 18 | 18 of 18 | 18 of 18 | 18 of 18  |
-| prompt tokens per case | 4,362    | 4,778    | 5,076    | 4,775     |
+| | v1 | v2 | v3 | v2-repeat |
+|---|---|---|---|---|
+| fields correct | 23 of 27 | 26 of 27 | 27 of 27 | 26 of 27 |
+| decision correct | 27 of 27 | 23 of 27 | 23 of 27 | 23 of 27 |
+| construction canonical | 14 of 18 | 18 of 18 | 18 of 18 | 18 of 18 |
+| prompt tokens per case | 4,362 | 4,778 | 5,076 | 4,775 |
 
 The gate passed v3 over v2: it fixed the one field v2 missed (the subclass guess the production fix was
 written for) and regressed nothing. The same gate run against v1 fails, because decision accuracy fell from
@@ -225,8 +225,9 @@ weigh init ~/code/my-app --name main              # adds weigh/main.suite.ts and
 Set optional `WEIGH_PUBLIC_ORIGIN=https://weigh.example` on the hub to pin share links
 and images to its public origin behind any proxy. It must be an absolute HTTP or HTTPS
 origin without a path, query, fragment or credentials (a trailing slash is allowed).
-An invalid value is ignored with one startup warning. When valid, it takes precedence
-over the Host header; when unset, the existing Host and `X-Forwarded-Proto` behavior stays.
+An empty value counts as unset. Any other invalid value is ignored with one startup
+warning. When valid, it takes precedence over the Host header; when unset, the existing
+Host and `X-Forwarded-Proto` behavior stays.
 
 The design and its decisions: `docs/superpowers/specs/2026-10-20-weigh-platform.md`.
 

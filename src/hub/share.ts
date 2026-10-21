@@ -39,7 +39,7 @@ export function copySummary(
 export function readPublicOrigin(
   value = process.env.WEIGH_PUBLIC_ORIGIN,
 ): string | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value.trim() === "") return undefined;
   try {
     const parsed = new URL(value);
     if (

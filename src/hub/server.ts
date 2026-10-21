@@ -968,7 +968,11 @@ export function startHub(o: HubOptions) {
     store,
     streams,
     url: bindBase(
-      server.hostname === "0.0.0.0" ? "127.0.0.1" : server.hostname!,
+      server.hostname === "0.0.0.0"
+        ? "127.0.0.1"
+        : server.hostname === "::"
+          ? "::1"
+          : server.hostname!,
       server.port!,
     ),
     stop: () => {
