@@ -13,6 +13,7 @@
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "zod": "^4"
   },
   "devDependencies": {
