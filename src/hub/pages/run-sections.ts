@@ -22,7 +22,8 @@ const count = (n: number, digits = 0, prefix = "") =>
     ? `<span data-count="${n}" data-digits="${digits}" data-prefix="${prefix}">${prefix}${number(n, digits)}</span>`
     : "Not available";
 
-export function verdictCard(run: Run, b?: Built): string {
+/** Shared verdict wording for the run card and the landing story. */
+export function verdictSummary(run: Run, b?: Built) {
   const complete =
     run.status === "finished" &&
     b &&
@@ -65,11 +66,43 @@ export function verdictCard(run: Run, b?: Built): string {
   } else if (complete && b.gate.pass && delta < 0) {
     sentence = `The ${next} stayed close enough to the ${current} to ship: ${result}, within the drop the suite allows.`;
   }
+  const ship = complete
+    ? b.gate.pass
+      ? "Ship it"
+      : "Don't ship"
+    : "Don't ship yet";
+  const answers =
+    decision?.candidate.n && decision.baseline.n
+      ? `${number(decision.candidate.passed)} of ${number(decision.candidate.n)} decisions right, ${decision.delta === 0 ? "unchanged from" : decision.delta > 0 ? "up from" : "down from"} ${number(decision.baseline.passed)} of ${number(decision.baseline.n)}.`
+      : "";
+  const cost =
+    complete && b
+      ? Number.isFinite(b.cmp.costUsd.pctChange)
+        ? b.cmp.costUsd.pctChange === 0
+          ? "Costs the same per case (API-equivalent)."
+          : `Costs ${change(b.cmp.costUsd.pctChange)} per case (API-equivalent).`
+        : "Cost change per case isn't available."
+      : "";
+  return {
+    complete,
+    sentence,
+    ship,
+    decision,
+    story: [sentence, complete ? answers : "", cost, `${ship}.`]
+      .filter(Boolean)
+      .join(" "),
+  };
+}
+
+export function verdictCard(run: Run, b?: Built): string {
+  const { complete, sentence, ship, decision } = verdictSummary(run, b);
+  const B = b?.cmp.baseline,
+    C = b?.cmp.candidate;
   const metric = (value: string, label: string, meaning: string) =>
     `<div><div class="n mono">${value}</div><b>${label}</b><p>${meaning}</p></div>`;
-  return `<div class="verdict-card" data-complete="${!!complete}" data-ship="${!!complete && b.gate.pass}">
+  return `<div class="verdict-card" data-complete="${!!complete}" data-ship="${!!complete && !!b?.gate.pass}">
 <h1 class="page display">${sentence}</h1>
-<p class="ship"><b>${complete ? (b.gate.pass ? "Ship it" : "Don't ship") : "Don't ship yet"}</b> ${tag("gate", "Whether the new prompt clears the suite's shipping rules")}${!complete && b ? " Results so far." : ""}</p>
+<p class="ship"><b>${ship}</b> ${tag("gate", "Whether the new prompt clears the suite's shipping rules")}${!complete && b ? " Results so far." : ""}</p>
 <div class="verdict-numbers">
 ${metric(decision?.candidate.n ? `${count(decision.candidate.passed)} of ${number(decision.candidate.n)}` : "Not graded", "Decisions right", decision?.baseline.n ? `Matches the expert's answer; current prompt ${number(decision.baseline.passed)} of ${number(decision.baseline.n)}.` : "This comparison has no decision answers graded yet.")}
 ${metric(C?.n ? `${count(C.passAll.passed)} of ${number(C.passAll.n)}` : "Waiting", `Cases that passed every check ${tag("pass-all", "A case passes every check that applies; unanswered checks are left out")}`, B?.n ? `All applicable checks passed; current prompt ${number(B.passAll.passed)} of ${number(B.passAll.n)}.` : "Every applicable check must pass.")}

@@ -1,31 +1,58 @@
 import { esc } from "../../report/html.ts";
+import { buildFrom } from "../../report/build.ts";
 import { pct, signedPct } from "../../stats.ts";
-import type { Project, Run, SuiteRow } from "../store.ts";
+import type { Project, Run, Store, SuiteRow } from "../store.ts";
 import { page, statusTag, when } from "./layout.ts";
+import { verdictSummary } from "./run-sections.ts";
 
-/** The front page: one card per project the viewer may see, with its latest run. */
+/** The landing uses the same stored comparison and verdict wording as the run page. */
 export function homePage(
-  projects: { project: Project; suites: SuiteRow[]; latest?: Run }[],
-  opts: { generatedAt?: string } = {},
+  store: Store,
+  opts: { generatedAt?: string; includePrivate?: boolean } = {},
 ): string {
+  const projects = store
+    .listProjects()
+    .filter((p) => p.public || opts.includePrivate);
+  const latest = store.latestFinishedRun(projects.map((p) => p.id));
+  const built = latest?.meta
+    ? buildFrom(latest.meta, store.traces(latest.key), store.judges(latest.key))
+    : undefined;
+  const href = latest
+    ? `/r/${encodeURIComponent(latest.suite)}/${encodeURIComponent(latest.run_id)}`
+    : undefined;
+  const labels = latest ? store.labelCount(latest.key) : 0;
+  const finishedAt = latest?.finished_at ?? latest?.meta?.finished_at;
   const cards = projects
-    .map(({ project, suites, latest }) => {
-      const s = latest?.summary;
-      const verdict = s
-        ? `${s.pass ? "Gate passed" : "Gate failed"} · pass-all ${pct(s.baseline_pass_all ?? NaN, 0)} to ${pct(s.candidate_pass_all ?? NaN, 0)} · tokens ${esc(signedPct(s.prompt_tokens_pct ?? NaN))}`
-        : latest
-          ? "no comparison yet"
-          : "no runs yet";
-      return `<a class="card" href="/p/${esc(project.id)}"><h3>${esc(project.name)}</h3><p>${esc(project.description || (suites.length ? suites.map((x) => x.name).join(", ") : "no suites registered"))}</p>
-<div class="row"><span>${latest ? statusTag(latest.status) : ""}</span><span class="mono">${latest ? when(latest.requested_at) : ""}</span></div>
-<div class="row" style="margin-top:8px"><span>${esc(verdict)}</span>${project.public ? "" : '<span class="tag">private</span>'}</div></a>`;
+    .map((project) => {
+      const suites = store.listSuites(project.id);
+      const run = store.listRuns({ project: project.id, limit: 1 })[0];
+      return `<a class="card" href="/p/${esc(encodeURIComponent(project.id))}"><h3>${landingText(project.name)}</h3><p>${landingText(project.description || (suites.length ? suites.map((s) => s.name).join(", ") : "No suites registered yet."))}</p>
+<div class="row"><span>${run ? statusTag(run.status) : "No runs yet."}</span><span class="mono">${run ? when(run.requested_at) : ""}</span></div>${project.public ? "" : '<span class="tag">private</span>'}</a>`;
     })
     .join("");
-  const body = `<h1 class="page display">Evaluations you can watch run.</h1>
-<p class="lede">Each project ships a suite file; the agent runs it and every finished pair lands here as it happens. Open a project for its runs, a run for the verdict, a case for what the model actually said.</p>
-${cards ? `<div class="cards">${cards}</div>` : '<p class="empty">Nothing public yet.</p>'}`;
+  const icon = (paths: string) =>
+    `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${paths}</svg>`;
+  const body = `<main class="landing">
+<h1 class="page display">Watch an AI get graded.</h1>
+<p class="lede">Weigh runs a new prompt against the old one on real cases, grades every answer, and shows the result as it happens. Built by Kyle Bartlett.</p>
+${latest ? `<article class="card latest-verdict" data-section="latest-verdict"><h2 class="label">Latest verdict</h2><p class="landing-story">${verdictSummary(latest, built).story}</p><a href="${esc(href!)}">watch the run</a></article>` : '<p class="empty">No finished run yet. The verdict will appear here when one finishes.</p>'}
+<section><h2 class="display">How it works</h2><ol class="landing-steps">
+<li>${icon('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M10 12l5 3-5 3z"/>')}<p>Queue a run from the browser.</p></li>
+<li>${icon('<rect x="3" y="3" width="18" height="14" rx="2"/><path d="M8 21h8M12 17v4M7 10l3 3 7-7"/>')}<p>Watch cases grade themselves live from an always-on machine.</p></li>
+<li>${icon('<path d="M14 2H5v20h14V7zM14 2v5h5M8 12h8M8 16h5"/>')}<p>Read the verdict and open any case to see what the model said.</p></li>
+</ol></section>
+<section><div class="sec-head"><h2 class="display">Why it matters</h2><p>An AI that reads emails and makes decisions will be wrong sometimes. The question is whether you find out first. This is how.</p></div></section>
+<div class="trust-strip" aria-label="Run evidence">
+${latest ? `<span>${finishedAt ? `Last run <time class="mono" datetime="${esc(finishedAt)}">${when(finishedAt)} UTC</time>` : "Finish date not recorded."}</span><span>${built ? `${built.cmp.candidate.n} cases` : "Case count not available."}</span><span>${labels && built?.judges.length ? `graders checked against ${labels} human labels` : labels ? `${labels} human labels recorded; graders not checked yet.` : "No human labels recorded for this run."}</span>` : ""}
+<a href="https://github.com/kyle-bartlett/weigh">Public code</a></div>
+<div class="landing-actions">${href ? `<a class="btn primary" href="${esc(href)}">Watch a run</a>` : '<button class="btn primary" type="button" disabled aria-disabled="true">Watch a run</button>'}<a class="btn" href="mailto:kyle@bartlettlabs.io">Talk to Kyle</a></div>
+<section id="projects"><div class="sec-head"><h2 class="display">For engineers</h2><p>Open a project for its suites, runs and every case behind the verdict.</p></div>${cards ? `<div class="cards">${cards}</div>` : '<p class="empty">Nothing public yet.</p>'}</section>
+</main>`;
   return page({ title: "Weigh", body, generatedAt: opts.generatedAt });
 }
+
+const landingText = (text: string) =>
+  esc(text.replace(/[\u2013\u2014]/g, ", ").replace(/(\d)\+/g, "$1 or more"));
 
 export function projectPage(
   project: Project,

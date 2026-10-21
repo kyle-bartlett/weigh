@@ -165,7 +165,8 @@ export function startHub(o: HubOptions) {
   async function mcp(c: Ctx, s: Set<Scope>): Promise<Response> {
     if (!s.has("read")) throw new HttpError(401, "unauthorized");
     const body = (await readJson(c, 256 << 10)) as
-      Record<string, unknown> | Record<string, unknown>[];
+      | Record<string, unknown>
+      | Record<string, unknown>[];
     const answer = (m: Record<string, unknown>) => handleMcp(store, m);
     if (Array.isArray(body)) {
       const out = body
@@ -235,17 +236,10 @@ export function startHub(o: HubOptions) {
     // pages
     route("GET", "/", (c) =>
       html(
-        homePage(
-          store
-            .listProjects()
-            .filter((p) => p.public || c.scopes.has("read"))
-            .map((project) => ({
-              project,
-              suites: store.listSuites(project.id),
-              latest: store.listRuns({ project: project.id, limit: 1 })[0],
-            })),
-          { generatedAt: now() },
-        ),
+        homePage(store, {
+          generatedAt: now(),
+          includePrivate: c.scopes.has("read"),
+        }),
       ),
     ),
     route("GET", "/p/:project", (c) => {

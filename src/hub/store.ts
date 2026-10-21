@@ -164,6 +164,17 @@ export class Store {
       .get(key) as Raw | null;
     return r ? run(r) : undefined;
   }
+  /** Select before limiting so queued runs cannot hide the last finished result. */
+  latestFinishedRun(projectIds: string[]): Run | undefined {
+    if (!projectIds.length) return undefined;
+    const row = this.db
+      .query(
+        `SELECT * FROM runs WHERE status = 'finished' AND project_id IN (${projectIds.map(() => "?").join(",")})
+       ORDER BY COALESCE(finished_at, json_extract(meta_json, '$.finished_at'), requested_at) DESC, key DESC LIMIT 1`,
+      )
+      .get(...projectIds) as Raw | null;
+    return row ? run(row) : undefined;
+  }
   listRuns(opts: { project?: string; limit?: number } = {}): Run[] {
     const limit = Math.min(opts.limit ?? 50, 500);
     const rows = opts.project
@@ -482,9 +493,15 @@ export class Store {
         );
     })();
   }
-  labels(
-    key: string,
-  ): {
+  /** Human answers for this run, counted once per case and version, not per grader. */
+  labelCount(key: string): number {
+    return (
+      this.db
+        .query("SELECT COUNT(*) AS n FROM labels WHERE run_key = ?")
+        .get(key) as { n: number }
+    ).n;
+  }
+  labels(key: string): {
     case_id: string;
     variant: string;
     human: "pass" | "fail";

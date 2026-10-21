@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { casePage } from "../src/hub/pages/case.ts";
 import { homePage, projectPage } from "../src/hub/pages/home.ts";
 import { runPage } from "../src/hub/pages/run.ts";
-import type { Project, Run } from "../src/hub/store.ts";
+import { Store, type Project, type Run } from "../src/hub/store.ts";
+import { openDb } from "../src/hub/db.ts";
 import { build, buildFrom } from "../src/report/build.ts";
 import { runFragments } from "../src/hub/pages/run-sections.ts";
 
@@ -55,6 +56,188 @@ describe("hub pages", () => {
     last_seq: 110,
     last_src_seq: 110,
   };
+
+  function landingStore() {
+    const store = new Store(openDb(":memory:"));
+    store.upsertProject(project);
+    store.createRun(run);
+    store.updateRun(run.key, run);
+    for (const line of b.lines) store.upsertTrace(run.key, line);
+    store.putJudges(run.key, b.judges);
+    return store;
+  }
+
+  test("landing renders the approved copy, shared verdict story, steps and buttons", () => {
+    const store = landingStore();
+    try {
+      const html = homePage(store);
+      expect(html).toContain("Watch an AI get graded.</h1>");
+      expect(html).toContain(
+        "Weigh runs a new prompt against the old one on real cases, grades every answer, and shows the result as it happens. Built by Kyle Bartlett.",
+      );
+      const sentence = runFragments(run, b).verdict.match(
+        /<h1[^>]*>(.*?)<\/h1>/s,
+      )![1]!;
+      expect(html).toContain(sentence);
+      expect(html).toContain(
+        "23 of 27 decisions right, unchanged from 23 of 27.",
+      );
+      expect(html).toContain("Costs 17.3% less per case (API-equivalent).");
+      expect(html).toContain("Ship it.");
+      for (const text of [
+        "Queue a run from the browser.",
+        "Watch cases grade themselves live from an always-on machine.",
+        "Read the verdict and open any case to see what the model said.",
+        "An AI that reads emails and makes decisions will be wrong sometimes. The question is whether you find out first. This is how.",
+      ])
+        expect(html).toContain(text);
+      expect(html.match(/<svg /g)).toHaveLength(3);
+      expect(html).toContain(`href="/r/${run.key}">watch the run</a>`);
+      expect(html).toContain(
+        `class="btn primary" href="/r/${run.key}">Watch a run</a>`,
+      );
+      expect(html).toContain(
+        'href="mailto:kyle@bartlettlabs.io">Talk to Kyle</a>',
+      );
+      expect(html).toContain(`href="/p/${project.id}"`);
+      expect(html.indexOf('id="projects"')).toBeGreaterThan(
+        html.indexOf("Talk to Kyle"),
+      );
+      expect(html).not.toMatch(DASH);
+      expect(html).not.toMatch(/\d\+/);
+    } finally {
+      store.db.close();
+    }
+  });
+
+  test("landing trust counts stored labels for the featured run, including edits", () => {
+    const store = landingStore();
+    try {
+      const labels = b.meta.case_order
+        .slice(0, 3)
+        .map((case_id) => ({
+          case_id,
+          variant: b.meta.candidate,
+          human: "pass" as const,
+        }));
+      store.upsertLabels(run, labels);
+      store.upsertLabels(run, [{ ...labels[0]!, human: "fail" }]);
+      let html = homePage(store);
+      expect(html).toContain("graders checked against 3 human labels");
+      expect(html).toContain("27 cases");
+      expect(html).toContain(`datetime="${run.finished_at}"`);
+      expect(html).toContain('href="https://github.com/kyle-bartlett/weigh"');
+      store.deleteLabel(run.key, labels[0]!.case_id, labels[0]!.variant);
+      html = homePage(store);
+      expect(html).toContain("graders checked against 2 human labels");
+      expect(html).not.toMatch(DASH);
+    } finally {
+      store.db.close();
+    }
+  });
+
+  test("landing selects by finish time, ignores active runs and hides private results", () => {
+    const store = landingStore();
+    try {
+      const older = { ...run, key: "exchange-triage/older", run_id: "older" };
+      store.createRun(older);
+      store.updateRun(older.key, {
+        ...older,
+        finished_at: "2026-01-01T00:00:00Z",
+      });
+      // Enough queued runs to put the finished run beyond listRuns' default limit.
+      for (let i = 0; i < 55; i++)
+        store.createRun({
+          ...run,
+          key: `exchange-triage/queued-${i}`,
+          run_id: `queued-${i}`,
+          status: "queued",
+        });
+      store.upsertProject({ id: "private", public: false });
+      const hidden = {
+        ...run,
+        key: "secret/hidden",
+        suite: "secret",
+        run_id: "hidden",
+        project_id: "private",
+      };
+      store.createRun(hidden);
+      store.updateRun(hidden.key, {
+        ...hidden,
+        finished_at: "2099-01-01T00:00:00Z",
+      });
+      store.upsertLabels(hidden, [
+        { case_id: "private-case", variant: "v3", human: "pass" },
+      ]);
+      for (const line of b.lines) store.upsertTrace(hidden.key, line);
+      expect(homePage(store)).toContain(
+        `class="btn primary" href="/r/${run.key}"`,
+      );
+      expect(homePage(store)).not.toContain("secret/hidden");
+      expect(homePage(store)).not.toContain(
+        "graders checked against 1 human labels",
+      );
+      expect(homePage(store, { includePrivate: true })).toContain(
+        'class="btn primary" href="/r/secret/hidden"',
+      );
+    } finally {
+      store.db.close();
+    }
+  });
+
+  test("landing without a finished run has no verdict or broken watch link", () => {
+    const store = new Store(openDb(":memory:"));
+    try {
+      for (const status of [
+        undefined,
+        "queued",
+        "running",
+        "failed",
+        "cancelled",
+        "lost",
+      ] as const) {
+        if (status) {
+          store.upsertProject(project);
+          if (!store.getRun(run.key)) store.createRun({ ...run, status });
+          store.updateRun(run.key, { status });
+        }
+        const html = homePage(store);
+        expect(html).toContain("Watch an AI get graded.");
+        expect(html).toContain("No finished run yet.");
+        expect(html).not.toContain('data-section="latest-verdict"');
+        expect(html).not.toContain('href="/r/');
+        expect(html).not.toContain("Last run");
+        expect(html).not.toContain("graders checked against");
+        expect(html).toContain(
+          'disabled aria-disabled="true">Watch a run</button>',
+        );
+        expect(html).toContain('href="mailto:kyle@bartlettlabs.io"');
+        expect(html).toContain('href="https://github.com/kyle-bartlett/weigh"');
+        expect(html).not.toMatch(DASH);
+      }
+    } finally {
+      store.db.close();
+    }
+  });
+
+  test("landing handles missing grades and uses the shared failed verdict", () => {
+    const store = landingStore();
+    try {
+      store.updateRun(run.key, { meta: { ...b.meta, baseline: "v1" } });
+      const html = homePage(store);
+      expect(html).toContain("4 fewer decisions right");
+      expect(html).toContain("Don't ship.");
+      expect(html).not.toContain("Ship it.");
+      store.db.run("DELETE FROM trace_lines WHERE run_key = ?", [run.key]);
+      const empty = homePage(store);
+      expect(empty).toContain("This comparison has no graded cases.");
+      expect(empty).not.toContain("Ship it.");
+      expect(empty).not.toMatch(/NaN|Infinity|undefined/);
+      expect(empty).not.toMatch(DASH);
+    } finally {
+      store.db.close();
+    }
+  });
 
   test("verdict says who won, by how much, and whether to ship", () => {
     const html = runPage(project, run, b);
@@ -203,7 +386,9 @@ describe("hub pages", () => {
   });
 
   test("every page renders without an em or en dash and carries what the live module patches", () => {
-    const home = homePage([{ project, suites: [], latest: run }]);
+    const store = landingStore();
+    const home = homePage(store);
+    store.db.close();
     const suite = {
       project_id: project.id,
       name: "exchange-triage",
