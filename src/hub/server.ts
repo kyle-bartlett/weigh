@@ -3,15 +3,7 @@ import { join } from "node:path";
 import type { RunStatus } from "../events.ts";
 import { newRunId } from "../run.ts";
 import { buildFrom, type JudgeRecord } from "../report/build.ts";
-import {
-  caseLedger,
-  checksSection,
-  headline,
-  lede,
-  proofStrip,
-  renderHtml,
-  verdictBand,
-} from "../report/html.ts";
+import { renderHtml } from "../report/html.ts";
 import { renderMarkdown } from "../report/md.ts";
 import { scrub } from "../scrub.ts";
 import type { VariantOutput } from "../types.ts";
@@ -27,6 +19,7 @@ import { HttpError, ingest, summarize } from "./ingest.ts";
 import { casePage } from "./pages/case.ts";
 import { homePage, projectPage } from "./pages/home.ts";
 import { runPage } from "./pages/run.ts";
+import { runFragments } from "./pages/run-sections.ts";
 import { type Project, type Run, runKey, Store, TERMINAL } from "./store.ts";
 import { Streams } from "./stream.ts";
 import { handleMcp } from "./mcp.ts";
@@ -172,8 +165,7 @@ export function startHub(o: HubOptions) {
   async function mcp(c: Ctx, s: Set<Scope>): Promise<Response> {
     if (!s.has("read")) throw new HttpError(401, "unauthorized");
     const body = (await readJson(c, 256 << 10)) as
-      | Record<string, unknown>
-      | Record<string, unknown>[];
+      Record<string, unknown> | Record<string, unknown>[];
     const answer = (m: Record<string, unknown>) => handleMcp(store, m);
     if (Array.isArray(body)) {
       const out = body
@@ -277,22 +269,12 @@ export function startHub(o: HubOptions) {
     route("GET", "/r/:suite/:run/fragments", (c) => {
       const { run } = visibleRun(c);
       const b = built(run, pickOf(c.url));
-      const href = `/r/${run.suite}/${run.run_id}`;
-      return json(
-        b
-          ? {
-              headline: headline(b),
-              lede: lede(b),
-              verdict: verdictBand(b),
-              proof: proofStrip(b),
-              checks: checksSection(b),
-              ledger: caseLedger(
-                b,
-                (id) => `${href}/c/${encodeURIComponent(id)}`,
-              ),
-            }
-          : { lede: run.meta?.description ?? "" },
-      );
+      return json({
+        ...runFragments(run, b),
+        status: run.status,
+        finished: run.finished,
+        total: run.total,
+      });
     }),
     route("GET", "/r/:suite/:run/report.html", (c) => {
       const { run } = visibleRun(c);

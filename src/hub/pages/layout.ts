@@ -22,7 +22,7 @@ h1.page{font-size:clamp(30px,3.6vw,48px);margin:16px 0 14px}
 .card h3{margin:0 0 4px}.card p{margin:0 0 10px;color:var(--ink2);font-size:14px}
 .card .row{display:flex;justify-content:space-between;gap:12px;font-size:13px;color:var(--ink3);align-items:center}
 .progress{height:6px;background:var(--bg2);border-radius:3px;overflow:hidden;margin:14px 0 6px}
-.progress i{display:block;height:100%;background:var(--live);transition:width .3s}
+.progress i{display:block;width:100%;height:100%;background:var(--live);transform-origin:left;transition:transform .3s}
 .empty{padding:36px 0;color:var(--ink2)}
 td.chk-cell .pending{display:inline-block;width:10px;height:10px;border-radius:50%;border:1px dashed var(--line);margin-right:4px;vertical-align:middle}
 tr.live-new td{animation:flash 1.2s ease-out}
@@ -35,6 +35,25 @@ pre.out{max-height:60vh;white-space:pre-wrap;word-break:break-word}
 .btn.primary{background:var(--live);border-color:var(--live);color:#fff}
 form.inline{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 input.txt{font:inherit;font-size:14px;padding:7px 10px;border:1px solid var(--line);border-radius:4px;background:var(--card);color:var(--ink);min-width:220px}
+.verdict-card{padding:20px 0 24px}.verdict-card h1{margin-top:0;line-height:1.12}
+.verdict-card h1 .tag{vertical-align:middle;text-transform:none;letter-spacing:0}
+.ship{margin:12px 0 20px}.ship b{color:var(--live)}
+.verdict-card[data-ship="false"] .ship b{color:var(--gate)}
+.verdict-numbers{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-block:1px solid var(--line);gap:20px;padding:20px 0}
+.verdict-numbers .n{font-size:clamp(23px,3vw,36px);line-height:1.2;margin-bottom:8px}
+.verdict-numbers p{color:var(--ink2);font-size:13px;margin:6px 0 0}.verdict-numbers b{font-size:14px;font-weight:500}
+.noise-note{font-size:13px;color:var(--ink2);margin:14px 0 0}
+.run-page{overflow-wrap:anywhere}.run-progress{display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center;color:var(--ink2);font-size:13px}
+.comparison-picker{margin:24px 0}.comparison-picker select{max-width:100%}
+.check-row{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,1fr);gap:24px;border-top:1px solid var(--line2);padding:18px 0}.check-row p{margin:6px 0;color:var(--ink2);font-size:14px}
+.case-decision{display:block;font-size:13px;color:var(--ink2);margin-top:6px}.case-table td{overflow-wrap:anywhere}.case-table details{font-size:13px;margin-top:8px}.case-table ul{padding-left:16px}
+.run-page summary{cursor:pointer}.run-page summary:focus-visible,.run-page .tag:focus-visible{outline:2px solid var(--live);outline-offset:3px}
+#engineers{border-top:1px solid var(--line);margin:20px 0}#engineers>summary{font-size:24px;padding:24px 0;font-weight:600}
+.table-scroll{overflow-x:auto;max-width:100%}.table-scroll table{min-width:650px}.run-page pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.run-page .tag{text-transform:none;letter-spacing:0}.run-page h1 .tag{font-size:.4em}
+@media(prefers-reduced-motion:reduce){.status.running i,tr.live-new td{animation:none}.progress i{transition:none}}
+@media(max-width:600px){.check-row{grid-template-columns:1fr;gap:0}.check-counts{display:block}.case-table thead{display:none}.case-table,.case-table tbody,.case-table tr,.case-table td{display:block;width:100%}.case-table tr{border-top:1px solid var(--line);padding:12px 0}.case-table td{border:0;padding:5px 0}.case-table td[data-label]::before{content:attr(data-label);display:block;font-size:12px;color:var(--ink3);font-weight:400}.run-page .sec-head{gap:12px}}
+@media(max-width:600px){.verdict-numbers{gap:12px;grid-template-columns:1fr;padding:12px 0}.verdict-numbers>div{display:grid;grid-template-columns:116px 1fr;column-gap:10px}.verdict-numbers .n{grid-row:1/3;font-size:23px;margin:0}.verdict-numbers p{margin-top:2px}.verdict-card h1{font-size:28px}.verdict-card{padding-top:16px}.ship{margin:10px 0 12px}}
 `;
 
 export interface PageOpts {
@@ -43,6 +62,13 @@ export interface PageOpts {
   crumbs?: { href: string; text: string }[];
   /** Loads web/run.js with the run key, for a page that should fill in live. */
   live?: { key: string; since: number };
+  runScript?: {
+    key: string;
+    since: number;
+    live: boolean;
+    finished: number;
+    total: number;
+  };
   generatedAt?: string;
 }
 
@@ -50,9 +76,11 @@ export function page(o: PageOpts): string {
   const crumbs = o.crumbs?.length
     ? `<nav class="crumbs">${o.crumbs.map((c) => (c.href ? `<a href="${esc(c.href)}">${esc(c.text)}</a>` : `<span>${esc(c.text)}</span>`)).join('<span aria-hidden="true">/</span>')}</nav>`
     : "";
-  const live = o.live
-    ? `<script type="module" src="/web/run.js" data-run="${esc(o.live.key)}" data-since="${o.live.since}"></script>`
-    : "";
+  const live = o.runScript
+    ? `<script type="module" src="/web/run.js" data-run="${esc(o.runScript.key)}" data-since="${o.runScript.since}" data-live="${o.runScript.live}" data-finished="${o.runScript.finished}" data-total="${o.runScript.total}"></script>`
+    : o.live
+      ? `<script type="module" src="/web/run.js" data-run="${esc(o.live.key)}" data-since="${o.live.since}"></script>`
+      : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(o.title)}</title>${FONTS}<style>${CSS}${HUB_CSS}</style></head><body><div class="wrap">
 <div class="top"><div><a href="/" style="text-decoration:none"><span class="name">Weigh</span></a> <span class="meta">evals you can watch</span></div><div class="meta mono">${esc((o.generatedAt ?? new Date().toISOString()).slice(0, 16).replace("T", " "))} UTC</div></div>
 ${crumbs}

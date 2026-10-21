@@ -1,110 +1,170 @@
-/* global document, fetch, EventSource, CSS, location, setTimeout, clearTimeout */
-// Live run page. Subscribes to the run's event stream and patches the page in place: progress on
-// every finished pair, the verdict, proof strip and checks table on every hub summary, the ledger
-// from the fragments endpoint. When the run ends the page reloads once into its static form.
-const script =
-  document.currentScript || document.querySelector("script[data-run]");
-const key = script.dataset.run;
-const since = Number(script.dataset.since || 0);
-const [suite, run] = key.split("/");
+/* global document, fetch, EventSource, CSS, location, setTimeout, clearTimeout, window, matchMedia, requestAnimationFrame, performance */
+// Static and streaming pages share disclosure behavior. Live HTML always comes from runFragments.
+const script = document.querySelector("script[data-run]");
+const [suite, run] = script.dataset.run.split("/");
 const base = `/r/${encodeURIComponent(suite)}/${encodeURIComponent(run)}`;
 const api = `/api/runs/${encodeURIComponent(suite)}/${encodeURIComponent(run)}`;
-const TERMINAL = new Set(["finished", "failed", "cancelled", "lost"]);
-
 const $ = (s) => document.querySelector(s);
-const put = (sel, html) => {
-  const el = $(sel);
-  if (el && typeof html === "string") el.innerHTML = html;
+const terminal = new Set(["finished", "failed", "cancelled", "lost"]);
+const openEngineers = () => {
+  if (location.hash === "#engineers") {
+    const drawer = $("#engineers");
+    if (drawer) drawer.open = true;
+  }
 };
+openEngineers();
+window.addEventListener("hashchange", openEngineers);
 
-let total = 0;
-let finished = 0;
+let total = Number(script.dataset.total || 0);
+let finished = Number(script.dataset.finished || 0);
 let ended = false;
+let animated = false;
+let refreshing = false;
+let dirty = false;
+let timer = 0;
 
 function progress() {
   const p = $("[data-progress]");
-  if (p) p.textContent = total ? `${finished} of ${total} pairs` : "";
-  const b = $("[data-progress-bar]");
-  if (b)
-    b.style.width = total ? `${Math.round((100 * finished) / total)}%` : "0%";
+  if (p)
+    p.textContent = total
+      ? ended
+        ? `Graded ${finished} of ${total} cases.`
+        : finished < total
+          ? `Grading case ${finished + 1} of ${total}`
+          : `Graded ${finished} of ${total} cases. Finishing the comparison.`
+      : "Waiting for the agent.";
+  const bar = $("[data-progress-bar]");
+  if (bar)
+    bar.style.transform = `scaleX(${total ? Math.min(1, Math.max(0, finished / total)) : 0})`;
 }
 
 function status(s) {
   const el = $("[data-status]");
-  if (!el) return;
-  el.className = `status ${s}`;
-  el.lastChild.textContent = s;
+  if (el) {
+    el.className = `status ${s}`;
+    el.lastChild.textContent = s;
+  }
 }
 
-let fragmentTimer = 0;
-function refreshFragments() {
-  clearTimeout(fragmentTimer);
-  fragmentTimer = setTimeout(async () => {
-    try {
-      const r = await fetch(`${base}/fragments`, {
-        headers: { accept: "application/json" },
-      });
-      if (!r.ok) return;
-      const f = await r.json();
-      put('[data-section="headline"]', f.headline);
-      put('[data-section="lede"]', f.lede);
-      put('[data-section="verdict"]', f.verdict);
-      put('[data-section="proof"]', f.proof);
-      put('[data-section="checks"]', f.checks);
-      put('[data-section="ledger"]', f.ledger);
-    } catch {
-      /* the next event tries again */
+function countUp() {
+  if (animated || !$("[data-complete=true]")) return;
+  animated = true;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const cells = [...document.querySelectorAll("[data-count]")];
+  cells.forEach((el) => el.setAttribute("aria-label", el.textContent));
+  const start = performance.now();
+  const frame = (now) => {
+    const fraction = Math.min(1, (now - start) / 600);
+    cells.forEach((el) => {
+      const digits = Number(el.dataset.digits);
+      el.textContent =
+        el.dataset.prefix +
+        (Number(el.dataset.count) * fraction).toLocaleString("en-US", {
+          minimumFractionDigits: digits,
+          maximumFractionDigits: digits,
+        });
+    });
+    if (fraction < 1) requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}
+
+async function refresh() {
+  if (refreshing) {
+    dirty = true;
+    return;
+  }
+  refreshing = true;
+  dirty = false;
+  try {
+    const response = await fetch(`${base}/fragments${location.search}`, {
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) throw new Error("Fragments unavailable");
+    const f = await response.json();
+    const openCases = [
+      ...document.querySelectorAll("tr[data-case] details[open]"),
+    ].map((el) => el.closest("tr").dataset.case);
+    for (const name of [
+      "verdict",
+      "changed",
+      "checks",
+      "ledger",
+      "cost",
+      "engineers",
+    ]) {
+      const el = $(`[data-section="${name}"]`);
+      if (el && typeof f[name] === "string") el.innerHTML = f[name];
     }
-  }, 400);
-}
-
-function flash(line) {
-  const row = document.querySelector(
-    `tr[data-case="${CSS.escape(line.case_id)}"]`,
-  );
-  if (row) {
-    row.classList.remove("live-new");
-    void row.offsetWidth;
-    row.classList.add("live-new");
+    for (const id of openCases) {
+      const detail = $(`tr[data-case="${CSS.escape(id)}"] details`);
+      if (detail) detail.open = true;
+    }
+    total = f.total;
+    finished = f.finished;
+    status(f.status);
+    if (terminal.has(f.status)) {
+      ended = true;
+      es?.close();
+      clearTimeout(timer);
+      dirty = false;
+      countUp();
+    }
+    progress();
+  } catch {
+    // Retry the final fetch too: completion must not depend on another event arriving.
+    dirty = true;
+  } finally {
+    refreshing = false;
+    if (dirty) timer = setTimeout(refresh, 1500);
   }
 }
-
-const es = new EventSource(`${api}/events?since=${since}`);
-es.addEventListener("run_start", (e) => {
-  const d = JSON.parse(e.data);
-  total = d.total + d.resumed;
-  finished = d.resumed;
-  progress();
-  status("running");
-  refreshFragments();
-});
-es.addEventListener("job_done", (e) => {
-  const d = JSON.parse(e.data);
-  finished = d.finished + Math.max(0, total - d.total);
-  progress();
-  flash(d.line);
-});
-es.addEventListener("summary", (e) => {
-  const d = JSON.parse(e.data);
-  if (d.html) {
-    put('[data-section="verdict"]', d.html.verdict);
-    put('[data-section="proof"]', d.html.proof);
-  }
-  refreshFragments();
-});
-es.addEventListener("status", (e) => {
-  const d = JSON.parse(e.data);
-  status(d.status);
-  if (TERMINAL.has(d.status)) finish();
-});
-es.addEventListener("end", finish);
-es.onerror = () => {
-  /* EventSource reconnects on its own with Last-Event-ID */
-};
-
+function schedule() {
+  clearTimeout(timer);
+  timer = setTimeout(refresh, 400);
+}
 function finish() {
   if (ended) return;
   ended = true;
   es.close();
-  setTimeout(() => location.reload(), 600);
+  schedule();
+}
+
+const es =
+  script.dataset.live === "true"
+    ? new EventSource(
+        `${api}/events?since=${Number(script.dataset.since || 0)}`,
+      )
+    : null;
+if (es) {
+  es.addEventListener("run_start", (e) => {
+    const d = JSON.parse(e.data);
+    total = d.total + d.resumed;
+    finished = d.resumed;
+    status("running");
+    progress();
+    schedule();
+  });
+  es.addEventListener("job_done", (e) => {
+    const d = JSON.parse(e.data);
+    finished = d.finished + Math.max(0, total - d.total);
+    progress();
+    const row = $(`tr[data-case="${CSS.escape(d.line.case_id)}"]`);
+    if (row) {
+      row.classList.remove("live-new");
+      void row.offsetWidth;
+      row.classList.add("live-new");
+    }
+    schedule();
+  });
+  es.addEventListener("summary", schedule);
+  es.addEventListener("status", (e) => {
+    const d = JSON.parse(e.data);
+    status(d.status);
+    if (terminal.has(d.status)) finish();
+  });
+  es.addEventListener("end", finish);
+  es.onerror = () => {
+    /* EventSource reconnects using Last-Event-ID. */
+  };
 }

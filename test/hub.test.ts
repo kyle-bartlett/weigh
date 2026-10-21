@@ -92,7 +92,7 @@ describe("hub", () => {
     const page = await (
       await get("/r/exchange-triage/2026-10-19-prompts")
     ).text();
-    expect(page).toContain("Gate passed");
+    expect(page).toContain("Ship it");
     expect(page.match(/data-case="/g)).toHaveLength(27);
     expect(page).not.toMatch(/[—–]/);
     expect(page).toContain("attribution_jev");
@@ -127,13 +127,13 @@ describe("hub", () => {
     const frag = (await (
       await get("/r/exchange-triage/2026-10-19-prompts/fragments")
     ).json()) as Record<string, string>;
-    expect(frag.verdict).toContain("Gate passed");
+    expect(frag.verdict).toContain("Ship it");
     expect(frag.ledger!.match(/data-case="/g)).toHaveLength(27);
     expect((await get("/web/run.js")).status).toBe(200);
     const fromV1 = await (
       await get("/r/exchange-triage/2026-10-19-prompts?baseline=v1")
     ).text();
-    expect(fromV1).toContain("does not clear the gate");
+    expect(fromV1).toContain("Don't ship");
 
     // SSE on a finished run replays run_start through run_done, then the hub's summary and status, then ends.
     const sse = await (
