@@ -8,8 +8,13 @@ import type { Run } from "../store.ts";
 
 export const tag = (name: string, meaning: string) =>
   `<span class="tag" tabindex="0" title="${esc(meaning)}">${esc(name)}</span>`;
+/** Display only: dashes become commas and a trailing "N+" becomes "N or more", so public pages never show either. */
+export const plainName = (text: string) =>
+  text
+    .replace(/\s*[\u2013\u2014]\s*/g, ", ")
+    .replace(/(\d)\+(?!\w)/g, "$1 or more");
 export const version = (name: string, role: string) =>
-  `${role} ${tag(name.replace(/\s*[\u2013\u2014]\s*/g, ", ").replace(/(\d)\+(?!\w)/g, "$1 or more"), `The ${role}'s version name`)}`;
+  `${role} ${tag(plainName(name), `The ${role}'s version name`)}`;
 const number = (n: number, digits = 0) =>
   Number.isFinite(n)
     ? n.toLocaleString("en-US", {
@@ -184,9 +189,7 @@ function prose(text: string, b?: Built): string {
     judges: ["AI graders", "judge"],
     judge: ["an AI grader", "judge"],
   };
-  return esc(
-    text.replace(/[\u2013\u2014]/g, ", ").replace(/(\d)\+/g, "$1 or more"),
-  )
+  return esc(plainName(text))
     .replace(
       /\b(baseline|candidate)\b(?:\s+([\w.-]+))?/gi,
       (_, role: string, following?: string) => {

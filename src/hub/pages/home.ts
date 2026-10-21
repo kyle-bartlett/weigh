@@ -3,7 +3,7 @@ import { buildFrom, type JudgeRecord } from "../../report/build.ts";
 import { pct, signedPct } from "../../stats.ts";
 import type { Project, Run, Store, SuiteRow } from "../store.ts";
 import { page, statusTag, when } from "./layout.ts";
-import { verdictSummary } from "./run-sections.ts";
+import { verdictSummary, plainName } from "./run-sections.ts";
 
 /** The landing uses the same stored comparison and verdict wording as the run page. */
 export function homePage(
@@ -23,9 +23,12 @@ export function homePage(
   const checked = Math.max(0, ...judges.map((j) => j.joined));
   const labels = latest ? store.labelCount(latest.key) : 0;
   const finishedAt = latest?.finished_at ?? latest?.meta?.finished_at;
-  const finishedUtc = finishedAt
-    ? new Date(finishedAt).toISOString()
-    : undefined;
+  // finished_at is agent-supplied text; an unparseable value must not take the landing page down.
+  const finishedDate = finishedAt ? new Date(finishedAt) : undefined;
+  const finishedUtc =
+    finishedDate && !Number.isNaN(finishedDate.getTime())
+      ? finishedDate.toISOString()
+      : undefined;
   const cards = projects
     .map((project) => {
       const suites = store.listSuites(project.id);
@@ -47,7 +50,7 @@ ${latest ? `<article class="card latest-verdict" data-section="latest-verdict"><
 </ol></section>
 <section><div class="sec-head"><h2 class="display">Why it matters</h2><p>An AI that reads emails and makes decisions will be wrong sometimes. The question is whether you find out first. This is how.</p></div></section>
 <div class="trust-strip" aria-label="Run evidence">
-${latest ? `<span>${finishedAt ? `Last run <time class="mono" datetime="${esc(finishedAt)}">${when(finishedUtc)} UTC</time>` : "Finish date not recorded."}</span><span>${built && built.cmp.candidate.n > 0 ? `${built.cmp.candidate.n} cases` : "Case count not available."}</span><span>${checked ? `graders checked against ${checked} human labels` : labels ? `${labels} human labels recorded; graders not checked yet.` : "No human labels recorded for this run."}</span>` : ""}
+${latest ? `<span>${finishedUtc ? `Last run <time class="mono" datetime="${esc(finishedUtc)}">${when(finishedUtc)} UTC</time>` : "Finish date not recorded."}</span><span>${built && built.cmp.candidate.n > 0 ? `${built.cmp.candidate.n} cases` : "Case count not available."}</span><span>${checked ? `graders checked against ${checked} human labels` : labels ? `${labels} human labels recorded; graders not checked yet.` : "No human labels recorded for this run."}</span>` : ""}
 <a href="https://github.com/kyle-bartlett/weigh">Public code</a></div>
 <div class="landing-actions">${href ? `<a class="btn primary" href="${esc(href)}">Watch a run</a>` : '<button class="btn primary" type="button" disabled aria-disabled="true">Watch a run</button>'}<a class="btn" href="mailto:kyle@bartlettlabs.io">Talk to Kyle</a></div>
 <section id="projects"><div class="sec-head"><h2 class="display">Projects</h2><p>Open a project for its suites, runs and every case behind the verdict.</p></div>${cards ? `<div class="cards">${cards}</div>` : '<p class="empty">Nothing public yet.</p>'}</section>
@@ -55,12 +58,7 @@ ${latest ? `<span>${finishedAt ? `Last run <time class="mono" datetime="${esc(fi
   return page({ title: "Weigh", body, generatedAt: opts.generatedAt });
 }
 
-const landingText = (text: string) =>
-  esc(
-    text
-      .replace(/\s*[\u2013\u2014]\s*/g, ", ")
-      .replace(/(\d)\+(?!\w)/g, "$1 or more"),
-  );
+const landingText = (text: string) => esc(plainName(text));
 
 /** Same no-traces rule as the run page. A malformed stored meta must not take down `/`. */
 function safeBuild(store: Store, run: Run, judges: JudgeRecord[]) {

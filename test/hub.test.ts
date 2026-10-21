@@ -141,7 +141,7 @@ describe("hub", () => {
     ).text();
     expect(withOutput).toContain("archived output text");
     expect(withOutput.split('<details id="engineers">')[0]).toContain(
-      "Joisted Masonry, matches the expert",
+      'Joisted Masonry<span class="field-verdict">Matches the expert</span>',
     );
     expect(casePage).toContain("Maple Row Apartments");
     expect(

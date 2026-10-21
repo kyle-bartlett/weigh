@@ -9,7 +9,13 @@ import { page, when } from "./layout.ts";
 import { productDecisionValue, version } from "./run-sections.ts";
 
 type FieldValue = string | number | null;
-type Field = { field: string; expected: FieldValue; got: FieldValue };
+type Field = {
+  field: string;
+  expected: FieldValue;
+  got: FieldValue;
+  /** The product's own verdict, when the suite stored one. */
+  correct?: boolean;
+};
 type StoredOutputs = Map<
   string,
   { output?: VariantOutput; truncated: boolean } | undefined
@@ -34,10 +40,13 @@ function answer(output: unknown) {
         fieldValue(field.expected) &&
         fieldValue(field.got)
       ) {
+        if (fields.has(field.field)) unavailable = true;
         fields.set(field.field, {
           field: field.field,
           expected: field.expected,
           got: field.got,
+          correct:
+            typeof field.correct === "boolean" ? field.correct : undefined,
         });
       } else unavailable = true;
     }
@@ -50,8 +59,14 @@ function answer(output: unknown) {
           field: "Decision",
           expected: output.expectedDecision,
           got: output.decision,
+          correct:
+            typeof output.decisionCorrect === "boolean"
+              ? output.decisionCorrect
+              : undefined,
         }
       : undefined;
+  if (record(output) && fieldValue(output.decision) && !decision)
+    unavailable = true;
   return { fields, decision, unavailable };
 }
 
@@ -65,10 +80,12 @@ function fieldTable(run: Run, outputs: StoredOutputs): string {
   const value = (v: FieldValue, decision: boolean) =>
     v === null ? "Not provided" : decision ? productDecisionValue(v) : esc(v);
   const row = (name: string, a?: Field, b?: Field, decision = false) => {
-    const cell = (field?: Field) =>
-      !field
-        ? "<td>No stored answer for this field.</td>"
-        : `<td${field.got !== field.expected ? ' class="field-difference"' : ""}>${value(field.got, decision)}, ${field.got === field.expected ? "matches" : "differs from"} the expert</td>`;
+    // The product scored the answer with its own normalization; only fall back to equality when no verdict was stored.
+    const cell = (field?: Field) => {
+      if (!field) return "<td>No stored answer for this field.</td>";
+      const ok = field.correct ?? field.got === field.expected;
+      return `<td${ok ? "" : ' class="field-difference"'}>${value(field.got, decision)}<span class="field-verdict">${ok ? "Matches" : "Differs from"} the expert</span></td>`;
+    };
     const expected =
       a && b && a.expected !== b.expected
         ? `Current prompt: ${value(a.expected, decision)}<br>New prompt: ${value(b.expected, decision)}<br>Stored expert answers differ.`
@@ -152,20 +169,13 @@ ${body}
 <details><summary>Trace line (JSON)</summary><pre class="out">${esc(JSON.stringify(l, null, 2))}</pre></details>
 ${o?.output !== undefined ? `<details><summary>Full output record (JSON)</summary><pre class="out">${esc(JSON.stringify(o.output, null, 2))}</pre></details>` : ""}</div>`;
   };
-  const untraced = [...outputs]
-    .filter(([name]) => !lines.some((l) => l.variant === name))
-    .map(
-      ([name, o]) =>
-        `<div><h3 class="mono">${esc(name)}</h3><p>No trace line stored.</p><pre class="out">${esc(JSON.stringify(o?.output, null, 2) ?? "Output not archived for this run.")}</pre>${o?.truncated ? '<p class="notes">Output truncated at 256 KB when stored.</p>' : ""}</div>`,
-    )
-    .join("");
   const body = `<main class="case-page"><h1 class="page display mono">${esc(caseId)}</h1>
 <p class="lede">${esc(run.suite)} · run <a href="${href}" class="mono">${esc(run.run_id)}</a></p>
 <section style="padding-top:0;border-top:0"><div class="sec-head"><h2 class="display">What the broker wrote</h2><p>What every version was given, as the suite chose to show it.</p></div>
 ${input ? `<pre class="out">${esc(input)}</pre>` : '<p class="empty">No input text stored.</p>'}</section>
 <section><div class="sec-head"><h2 class="display">What each version answered</h2><p>Compare each answer with the expert's answer. Highlighted cells differ from the expert; marked rows show where the versions disagree.</p></div>
 ${fieldTable(run, outputs)}</section>
-<details id="engineers"><summary>For engineers</summary><p>Checks are the suite's binary checks on each output; a judge that gave no verdict is unanswered and not counted.</p><div class="case-records">${lines.map(col).join("")}${untraced}</div></details></main>`;
+<details id="engineers"><summary>For engineers</summary><p>Checks are the suite's binary checks on each output; a judge that gave no verdict is unanswered and not counted.</p><div class="case-records">${lines.map(col).join("")}</div></details></main>`;
   return page({
     title: `${caseId} · ${run.suite} · Weigh`,
     body,

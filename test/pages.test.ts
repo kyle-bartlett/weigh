@@ -86,13 +86,13 @@ describe("hub pages", () => {
                   line.variant === b.meta.baseline
                     ? "Frame"
                     : "Joisted Masonry",
-                correct: true,
+                correct: line.variant !== b.meta.baseline,
               },
             ],
             decision:
               line.variant === b.meta.baseline ? "INCOMPLETE" : "IN APPETITE",
             expectedDecision: "IN APPETITE",
-            decisionCorrect: true,
+            decisionCorrect: line.variant !== b.meta.baseline,
           },
           usage: line.usage,
         },
@@ -116,9 +116,23 @@ describe("hub pages", () => {
     expect(product).toContain('class="table-scroll"');
     expect(product).toContain('data-different="true"');
     expect(product).toContain(
-      '<td class="field-difference">Frame, differs from the expert</td>',
+      '<td class="field-difference">Frame<span class="field-verdict">Differs from the expert</span></td>',
     );
-    expect(product).toContain("Joisted Masonry, matches the expert");
+    expect(product).toContain(
+      'Joisted Masonry<span class="field-verdict">Matches the expert</span>',
+    );
+    // Column order: the baseline's answer sits under "Current prompt", the candidate's under "New prompt".
+    const head = product!.slice(product!.indexOf("<thead>"));
+    expect(head.indexOf(b.meta.baseline)).toBeLessThan(
+      head.indexOf(b.meta.candidate),
+    );
+    const row = product!.slice(product!.indexOf("construction"));
+    expect(row.indexOf("Frame<span")).toBeLessThan(
+      row.indexOf("Joisted Masonry<span"),
+    );
+    expect(row.indexOf("follow up with the broker")).toBeLessThan(
+      row.lastIndexOf("quote it"),
+    );
     expect(product).toContain("follow up with the broker");
     expect(product).toContain("quote it");
     expect(product).toContain('class="tag"');
@@ -156,7 +170,13 @@ describe("hub pages", () => {
         stored({
           fields: [
             { field: "nullable", expected: null, got: null, correct: false },
-            { field: "missing", expected: 0, got: 0, correct: true },
+            { field: "missing", expected: 0, got: 0 },
+            {
+              field: "county",
+              expected: "Harris County",
+              got: "Harris",
+              correct: true,
+            },
             { field: "conflict", expected: "A", got: "A", correct: true },
             { field: "<script>", expected: "<b>", got: "<b>", correct: true },
           ],
@@ -166,31 +186,34 @@ describe("hub pages", () => {
         b.meta.candidate,
         stored({
           fields: [
-            {
-              field: "nullable",
-              expected: null,
-              got: "invented",
-              correct: true,
-            },
+            { field: "nullable", expected: null, got: "invented" },
             { field: "conflict", expected: "B", got: "B", correct: true },
           ],
           decision: "REFERRED",
           expectedDecision: "REFERRED",
         }),
       ],
-      ["untraced", stored("extra raw record")],
     ]);
     const html = casePage(project, run, "GOLD-01", undefined, lines, outputs);
     const [product, engineers] = html.split('<details id="engineers">');
-    expect(product).toContain("Not provided, matches the expert");
-    expect(product).toContain("invented, differs from the expert");
-    expect(product).toContain("0, matches the expert");
+    // A stored verdict wins over literal equality; equality is only the fallback when no verdict was stored.
+    expect(product).toContain(
+      '<td class="field-difference">Not provided<span class="field-verdict">Differs from the expert</span></td>',
+    );
+    expect(product).toContain(
+      '<td class="field-difference">invented<span class="field-verdict">Differs from the expert</span></td>',
+    );
+    expect(product).toContain(
+      '<td>Harris<span class="field-verdict">Matches the expert</span></td>',
+    );
+    expect(product).toContain(
+      '<td>0<span class="field-verdict">Matches the expert</span></td>',
+    );
     expect(product).toContain("No stored answer for this field.");
     expect(product).toContain("Stored expert answers differ.");
     expect(product).toContain("send to an underwriter");
     expect(product).toContain("&lt;script&gt;");
     expect(product).not.toContain("<b>, matches");
-    expect(engineers).toContain("extra raw record");
     for (const malformed of [
       "plain answer",
       null,
@@ -198,6 +221,13 @@ describe("hub pages", () => {
       {},
       { fields: null },
       { fields: [null, "bad", { field: "bad", expected: {}, got: [] }] },
+      {
+        fields: [
+          { field: "dup", expected: 1, got: 1 },
+          { field: "dup", expected: 2, got: 2 },
+        ],
+      },
+      { fields: [{ field: "a", expected: 1, got: 1 }], decision: "REFERRED" },
     ]) {
       const fallback = casePage(
         project,
@@ -211,16 +241,18 @@ describe("hub pages", () => {
       expect(fallback.split('<details id="engineers">')[1]).toContain(
         "Full output record (JSON)",
       );
-      expect(fallback).not.toContain("undefined, matches the expert");
+      expect(fallback).not.toContain("undefined<span");
     }
   });
 
   test("landing normalizes offset timestamps and version punctuation", () => {
     const store = landingStore();
     try {
+      store.updateRun(run.key, { finished_at: "garbage" });
+      expect(homePage(store)).toContain("Finish date not recorded.");
       store.updateRun(run.key, { finished_at: "2026-10-20T01:30:00+03:00" });
-      expect(homePage(store).includes(">2026-10-19 22:30 UTC</time>")).toBe(
-        true,
+      expect(homePage(store)).toContain(
+        'datetime="2026-10-19T22:30:00.000Z">2026-10-19 22:30 UTC</time>',
       );
       const candidate = "new\u2013prompt 300+";
       store.updateRun(run.key, {

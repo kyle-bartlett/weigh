@@ -58,7 +58,7 @@ input.txt{font:inherit;font-size:14px;padding:7px 10px;border:1px solid var(--li
 .table-scroll{overflow-x:auto;max-width:100%}.table-scroll table{min-width:650px}.run-page pre{white-space:pre-wrap;overflow-wrap:anywhere}
 .case-page{overflow-wrap:anywhere}.case-page .tag{text-transform:none;letter-spacing:0}
 @media(max-width:600px){.case-page .sec-head{grid-template-columns:1fr;gap:12px}}
-.field-table .field-difference{background:var(--gate-soft)}
+.field-table .field-difference{background:var(--gate-soft)}.field-table .field-verdict{display:block;font-size:12.5px;color:var(--ink3);margin-top:2px}
 .case-records{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:24px}.case-records>div{min-width:0}.case-page .kv{grid-template-columns:minmax(0,max-content) minmax(0,1fr)}.case-page summary{cursor:pointer}
 .run-page .tag{text-transform:none;letter-spacing:0}.run-page h1 .tag{font-size:.4em}
 @media(prefers-reduced-motion:reduce){.status.running i,tr.live-new td{animation:none}.progress i{transition:none}}
