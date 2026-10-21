@@ -1,4 +1,4 @@
-/* global document, fetch, EventSource, CSS, location, setTimeout, clearTimeout, window, matchMedia, requestAnimationFrame, performance */
+/* global document, fetch, EventSource, CSS, location, setTimeout, clearTimeout, window, matchMedia, requestAnimationFrame, performance, navigator, CustomEvent, Element */
 // Static and streaming pages share disclosure behavior. Live HTML always comes from runFragments.
 const script = document.querySelector("script[data-run]");
 const [suite, run] = script.dataset.run.split("/");
@@ -15,6 +15,38 @@ const openEngineers = () => {
 };
 openEngineers();
 window.addEventListener("hashchange", openEngineers);
+
+let copyTimer = 0;
+document.addEventListener("click", async (event) => {
+  const button =
+    event.target instanceof Element
+      ? event.target.closest("[data-copy-summary]")
+      : null;
+  if (!button) return;
+  const share = button.closest("[data-share]");
+  const field = share.querySelector("textarea");
+  const feedback = share.querySelector("[data-copy-status]");
+  clearTimeout(copyTimer);
+  button.disabled = true;
+  try {
+    await navigator.clipboard.writeText(field.value);
+    button.textContent = "Copied";
+    feedback.textContent = "Copied";
+    share.querySelector("[data-copy-fallback]").hidden = true;
+    copyTimer = setTimeout(() => {
+      button.textContent = "Copy summary";
+      feedback.textContent = "";
+    }, 2000);
+  } catch {
+    button.textContent = "Copy summary";
+    share.querySelector("[data-copy-fallback]").hidden = false;
+    feedback.textContent = "Select and copy";
+    field.focus();
+    field.select();
+  } finally {
+    button.disabled = false;
+  }
+});
 
 let total = Number(script.dataset.total || 0);
 let finished = Number(script.dataset.finished || 0);
@@ -100,6 +132,7 @@ async function refresh() {
     ].map((el) => el.closest("tr").dataset.case);
     for (const name of [
       "verdict",
+      "share",
       "changed",
       "checks",
       "ledger",
@@ -116,12 +149,16 @@ async function refresh() {
     total = f.total;
     finished = f.finished;
     status(f.status);
+    const share = $("[data-share]");
+    if (share) share.hidden = f.status !== "finished";
     if (terminal.has(f.status)) {
       ended = true;
       es?.close();
       clearTimeout(timer);
       dirty = false;
       countUp();
+      if (f.status === "finished")
+        document.dispatchEvent(new CustomEvent("weigh:run-finished"));
     }
     progress();
   } catch {

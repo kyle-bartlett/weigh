@@ -89,10 +89,15 @@ export function verdictSummary(run: Run, b?: Built) {
         : "Cost change per case isn't available."
       : "";
   return {
+    status: run.status,
     complete,
     sentence,
     ship,
     decision,
+    answers: complete ? answers : "",
+    cost,
+    changed:
+      complete && b ? changedSentence(b) : "The comparison isn't finished yet.",
     story: [sentence, complete ? answers : "", cost, `${ship}.`]
       .filter(Boolean)
       .join(" "),
@@ -223,7 +228,7 @@ function pairedRows(b: Built) {
   );
 }
 
-export function changedCases(b: Built, base: string): string {
+function changedGroups(b: Built) {
   const rows = pairedRows(b);
   const passesAll = (line: (typeof rows)[number]["after"]) =>
     line.ok && b.meta.checks.every((c) => line.checks[c.id] !== false);
@@ -243,6 +248,17 @@ export function changedCases(b: Built, base: string): string {
           (c) => before.checks[c.id] === true && after.checks[c.id] === false,
         )),
   );
+  return { fixed, broken };
+}
+
+export function changedSentence(b: Built): string {
+  const { fixed, broken } = changedGroups(b);
+  return `${fixed.length} ${fixed.length === 1 ? "case" : "cases"} fixed; ${broken.length} ${broken.length === 1 ? "case" : "cases"} broke compared with the current prompt.`;
+}
+
+export function changedCases(b: Built, base: string): string {
+  const { fixed, broken } = changedGroups(b);
+  const rows = pairedRows(b);
   const links = (items: typeof rows) =>
     items
       .map(({ id }) => `<a href="${esc(caseUrl(base, id))}">${esc(id)}</a>`)

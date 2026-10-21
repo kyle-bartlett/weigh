@@ -80,6 +80,8 @@ export interface PageOpts {
     total: number;
   };
   generatedAt?: string;
+  social?: { title: string; description: string; image: string };
+  tour?: boolean;
 }
 
 export function page(o: PageOpts): string {
@@ -91,12 +93,15 @@ export function page(o: PageOpts): string {
     : o.live
       ? `<script type="module" src="/web/run.js" data-run="${esc(o.live.key)}" data-since="${o.live.since}"></script>`
       : "";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(o.title)}</title>${FONTS}<style>${CSS}${HUB_CSS}</style></head><body><div class="wrap">
+  const social = o.social
+    ? `<meta property="og:title" content="${esc(o.social.title)}"><meta property="og:description" content="${esc(o.social.description)}"><meta property="og:image" content="${esc(o.social.image)}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${esc(o.social.image)}">`
+    : "";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(o.title)}</title>${social}${FONTS}${o.tour ? '<link rel="stylesheet" href="/web/tour.css">' : ""}<style>${CSS}${HUB_CSS}</style></head><body><div class="wrap">
 <div class="top"><div><a href="/" style="text-decoration:none"><span class="name">Weigh</span></a> <span class="meta">evals you can watch</span></div><div class="meta mono">${esc((o.generatedAt ?? new Date().toISOString()).slice(0, 16).replace("T", " "))} UTC</div></div>
 ${crumbs}
 ${o.body}
 <footer>Weigh, by Kyle Bartlett. Every number on this page maps to a stored trace line; the report and the summary come from the same code.</footer>
-</div>${live}</body></html>`;
+</div>${live}${o.tour ? '<script type="module" src="/web/tour.js"></script>' : ""}</body></html>`;
 }
 
 export const statusTag = (s: RunStatus) =>

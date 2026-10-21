@@ -1,0 +1,93 @@
+[data-share] {
+  margin: 0 0 24px;
+}
+[data-copy-fallback] {
+  margin-top: 12px;
+}
+[data-copy-fallback] label {
+  display: block;
+  margin-bottom: 6px;
+}
+[data-copy-fallback] textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 140px;
+  padding: 12px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  resize: vertical;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.tour-tooltip {
+  position: fixed;
+  margin: 0;
+  box-sizing: border-box;
+  width: min(360px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  padding: 20px;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+.tour-tooltip::backdrop {
+  background: rgb(19 26 22 / 12%);
+}
+.tour-tooltip h2 {
+  font-size: 24px;
+  line-height: 1.15;
+  margin: 12px 0;
+}
+.tour-tooltip p {
+  margin: 0 0 16px;
+}
+.tour-tooltip .tour-progress {
+  font-size: 11px;
+  color: var(--ink2);
+}
+.tour-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tour-actions .btn {
+  min-height: 44px;
+}
+.tour-actions [data-back] {
+  margin-right: auto;
+}
+.tour-target {
+  outline: 2px solid var(--live);
+  outline-offset: 3px;
+}
+.tour-tooltip :focus-visible,
+[data-share] :focus-visible {
+  outline: 2px solid var(--live);
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tour-tooltip,
+  .tour-tooltip *,
+  .tour-target {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}

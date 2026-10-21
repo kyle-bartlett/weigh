@@ -3,7 +3,8 @@ import { esc } from "../../report/html.ts";
 import type { Project, Run } from "../store.ts";
 import { TERMINAL } from "../store.ts";
 import { page, statusTag, when } from "./layout.ts";
-import { runFragments } from "./run-sections.ts";
+import { runFragments, verdictSummary } from "./run-sections.ts";
+import { plainSummary, shareControls, shareUrls } from "../share.ts";
 
 /** The page and live endpoint share these fragments, including unfinished verdicts. */
 export function runPage(
@@ -13,6 +14,7 @@ export function runPage(
   opts: {
     pick?: { baseline?: string; candidate?: string };
     generatedAt?: string;
+    origin?: string;
   } = {},
 ): string {
   const live = !TERMINAL.has(run.status);
@@ -25,8 +27,11 @@ export function runPage(
 <div class="progress"><i data-progress-bar style="transform:scaleX(${run.total ? Math.min(1, Math.max(0, run.finished / run.total)) : 0})"></i></div>
 <p class="noise-note">Progress counts each case once for each prompt being graded.</p>`;
   const f = runFragments(run, built);
+  const summary = verdictSummary(run, built);
+  const urls = shareUrls(run, built, opts.origin ?? "");
   const body = `<main class="run-page">
 <div data-section="verdict">${f.verdict}</div>
+<div data-section="share">${shareControls(run, built, urls.link)}</div>
 ${progress}${picker}
 <div data-section="changed">${f.changed}</div>
 <div data-section="checks">${f.checks}</div>
@@ -50,5 +55,11 @@ ${progress}${picker}
       total: run.total,
     },
     generatedAt: opts.generatedAt,
+    social: {
+      title: plainSummary(summary.sentence),
+      description: plainSummary(summary.changed),
+      image: urls.image,
+    },
+    tour: true,
   });
 }

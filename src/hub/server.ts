@@ -19,7 +19,9 @@ import { HttpError, ingest, summarize } from "./ingest.ts";
 import { casePage } from "./pages/case.ts";
 import { homePage, projectPage } from "./pages/home.ts";
 import { runPage } from "./pages/run.ts";
-import { runFragments } from "./pages/run-sections.ts";
+import { runFragments, verdictSummary } from "./pages/run-sections.ts";
+import { renderVerdictPng } from "./og.ts";
+import { publicOrigin, shareControls, shareUrls } from "./share.ts";
 import { type Project, type Run, runKey, Store, TERMINAL } from "./store.ts";
 import { Streams } from "./stream.ts";
 import { handleMcp } from "./mcp.ts";
@@ -92,6 +94,8 @@ export function startHub(o: HubOptions) {
   const streams = new Streams();
   const webDir = o.webDir ?? join(import.meta.dir, "..", "..", "web");
   const now = () => new Date().toISOString();
+  // Sequence identifies a snapshot; selected comparisons stay separate within it.
+  const images = new Map<string, Map<string, Uint8Array>>();
 
   const html = (
     body: string,
@@ -161,6 +165,14 @@ export function startHub(o: HubOptions) {
     baseline: url.searchParams.get("baseline") || undefined,
     candidate: url.searchParams.get("candidate") || undefined,
   });
+  const sharePick = (run: Run, url: URL) => {
+    const pick = pickOf(url);
+    for (const role of ["baseline", "candidate"] as const) {
+      if (!run.meta?.variants.some((v) => v.name === pick[role]))
+        delete pick[role];
+    }
+    return pick;
+  };
 
   async function mcp(c: Ctx, s: Set<Scope>): Promise<Response> {
     if (!s.has("read")) throw new HttpError(401, "unauthorized");
@@ -234,6 +246,23 @@ export function startHub(o: HubOptions) {
     }),
 
     // pages
+    route("GET", "/latest", () => {
+      const run = store.latestFinishedRun(
+        store
+          .listProjects()
+          .filter((p) => p.public)
+          .map((p) => p.id),
+      );
+      if (!run) return text("No finished run yet.", 404);
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: `/r/${encodeURIComponent(run.suite)}/${encodeURIComponent(run.run_id)}`,
+          "cache-control": "no-store",
+          ...SECURITY,
+        },
+      });
+    }),
     route("GET", "/", (c) =>
       html(
         homePage(store, {
@@ -255,16 +284,59 @@ export function startHub(o: HubOptions) {
     }),
     route("GET", "/r/:suite/:run", (c) => {
       const { project, run } = visibleRun(c);
-      const pick = pickOf(c.url);
+      const pick = sharePick(run, c.url);
       return html(
-        runPage(project, run, built(run, pick), { pick, generatedAt: now() }),
+        runPage(project, run, built(run, pick), {
+          pick,
+          generatedAt: now(),
+          origin: publicOrigin(c.req),
+        }),
       );
+    }),
+    route("GET", "/r/:suite/:run/og\\.png", (c) => {
+      // Check visibility before looking in the cache, including after a project becomes private.
+      const { run } = visibleRun(c);
+      const pick = sharePick(run, c.url);
+      const key = JSON.stringify([run.key, run.last_seq]);
+      const comparison = JSON.stringify([
+        pick.baseline ?? run.meta?.baseline,
+        pick.candidate ?? run.meta?.candidate,
+      ]);
+      let png =
+        run.status === "finished"
+          ? images.get(key)?.get(comparison)
+          : undefined;
+      if (!png) {
+        png = renderVerdictPng(verdictSummary(run, built(run, pick)));
+        if (run.status === "finished") {
+          if (!images.has(key)) {
+            if (images.size >= 32) images.delete(images.keys().next().value!);
+            images.set(key, new Map());
+          }
+          const comparisons = images.get(key)!;
+          if (comparisons.size >= 8)
+            comparisons.delete(comparisons.keys().next().value!);
+          comparisons.set(comparison, png);
+        }
+      }
+      return new Response(Buffer.from(png), {
+        headers: {
+          "content-type": "image/png",
+          "cache-control": "private, no-store",
+          ...SECURITY,
+        },
+      });
     }),
     route("GET", "/r/:suite/:run/fragments", (c) => {
       const { run } = visibleRun(c);
-      const b = built(run, pickOf(c.url));
+      const b = built(run, sharePick(run, c.url));
       return json({
         ...runFragments(run, b),
+        share: shareControls(
+          run,
+          b,
+          shareUrls(run, b, publicOrigin(c.req)).link,
+        ),
         status: run.status,
         finished: run.finished,
         total: run.total,

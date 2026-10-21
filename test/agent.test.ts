@@ -1,10 +1,20 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import "./transport.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startAgent } from "../src/agent/main.ts";
 import { startHub } from "../src/hub/server.ts";
 
+// Subprocess runs use the same budget as `bun test --timeout 60000`.
+setDefaultTimeout(60_000);
 const ROOT = join(import.meta.dir, "..");
 const T = { admin: "admin-token", agent: "agent-token", read: "read-token" };
 
