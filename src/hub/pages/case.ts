@@ -106,13 +106,17 @@ function fieldTable(run: Run, outputs: StoredOutputs): string {
       a && b && a.expected !== b.expected
         ? `Current prompt: ${value(a.expected, decision, name)}<br>New prompt: ${value(b.expected, decision, name)}<br>Stored expert answers differ.`
         : value((a ?? b)!.expected, decision, name);
+    // Verdicts against different expert answers say nothing about each other, so when the two
+    // stored expert answers differ the mark compares the answers themselves.
     const differs =
       a &&
       b &&
-      (verdict(a) !== verdict(b) ||
-        (!verdict(a) &&
-          !verdict(b) &&
-          normalized(a.got) !== normalized(b.got)));
+      (a.expected !== b.expected
+        ? normalized(a.got) !== normalized(b.got)
+        : verdict(a) !== verdict(b) ||
+          (!verdict(a) &&
+            !verdict(b) &&
+            normalized(a.got) !== normalized(b.got)));
     return `<tr${differs ? ' data-different="true"' : ""}><th scope="row">${esc(name.replace(/_/g, " "))}${differs ? '<span class="field-disagree">Versions disagree</span>' : ""}</th><td>${expected}</td>${cell(a)}${cell(b)}</tr>`;
   };
   const rows =
