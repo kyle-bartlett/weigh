@@ -153,6 +153,13 @@ export const SuiteSchema = z
         i,
         "description",
       ]);
+    for (const [i, step] of (s.timeline ?? []).entries())
+      for (const key of ["version", "headline", "number"] as const)
+        checkText(step[key], `timeline step ${i + 1} ${key}`, [
+          "timeline",
+          i,
+          key,
+        ]);
     const names = new Set(s.variants.map((v) => v.name));
     for (const k of ["baseline", "candidate", "noise"] as const) {
       const v = s[k];

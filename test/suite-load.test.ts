@@ -14,6 +14,7 @@ interface SuiteText {
   variantDescriptions?: readonly string[];
   checks?: readonly { id: string; description: string }[];
   skipped?: readonly { id: string; reason: string }[];
+  timeline?: readonly { version: string; headline: string; number: string }[];
 }
 
 function suiteFile(names: string[], text: SuiteText = {}): string {
@@ -33,6 +34,7 @@ function suiteFile(names: string[], text: SuiteText = {}): string {
         ...check, kind: "code", test: () => true
       })),
       ${text.skipped ? `skipped: () => ${JSON.stringify(text.skipped)},` : ""}
+      ${text.timeline ? `timeline: ${JSON.stringify(text.timeline)},` : ""}
       baseline: ${JSON.stringify(names[0])},
       candidate: ${JSON.stringify(names[1])}
     };`,
@@ -83,6 +85,16 @@ describe("suite text", () => {
       path: "checks.0.description",
       field: 'check "shape" description',
       reason: "contains an en dash or em dash",
+    },
+    {
+      text: {
+        timeline: [
+          { version: "v3", headline: "Handled 300+ submissions", number: "5" },
+        ],
+      },
+      path: "timeline.0.headline",
+      field: "timeline step 1 headline",
+      reason: 'contains a number followed by "+"',
     },
   ])("rejects $path", async ({ text, path, field, reason }) => {
     const file = suiteFile(["v2", "v3"], text);
