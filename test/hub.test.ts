@@ -706,6 +706,26 @@ describe("agent labels and judge validation", () => {
     }
   });
 
+  test("labels with an unknown split are refused on both routes", async () => {
+    await claimedRun("splits");
+    for (const split of ["all", "bogus"]) {
+      const row = { case_id: "GOLD-02", variant: "v3", human: "pass", split };
+      const agent = await call("PUT", path("splits", "/labels"), {
+        agent_id: "imac",
+        labels: [row],
+      });
+      expect(agent.status).toBe(400);
+      const admin = await call(
+        "PUT",
+        path("splits", "/labels", false),
+        { labels: [row] },
+        T.admin,
+      );
+      expect(admin.status).toBe(400);
+    }
+    expect(snapshot("splits").labels).toEqual([]);
+  });
+
   test("existing admin write routes still reject the agent token", async () => {
     const before = snapshot("owned");
     for (const op of operations) {

@@ -305,7 +305,7 @@ export async function uploadLabels(o: {
       unchanged = result.skipped;
       log(
         "info",
-        `labels: ${uploaded} rows uploaded from ${meta.labels}, ${unchanged} already on the hub left unchanged`,
+        `labels: ${uploaded} rows uploaded from ${meta.labels}, ${unchanged} already labelled (on the hub or earlier in the file) left unchanged`,
       );
     } catch (e) {
       log(
@@ -356,7 +356,12 @@ export async function uploadLabels(o: {
     }
     return outcome;
   } catch (e) {
-    log("warn", `labels: ${labelsMessage(hub, e)}; skipped`);
+    // A filesystem error message carries the absolute path; log only its code.
+    const code = (e as { code?: unknown } | null)?.code;
+    log(
+      "warn",
+      `labels: ${typeof code === "string" ? code : labelsMessage(hub, e)}; skipped`,
+    );
     return { skipped: "unexpected labels error" };
   }
 }

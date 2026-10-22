@@ -30,7 +30,7 @@ import {
 import { type Project, type Run, runKey, Store, TERMINAL } from "./store.ts";
 import { Streams } from "./stream.ts";
 import { handleMcp } from "./mcp.ts";
-import { type LabelRow, validate } from "../judge.ts";
+import { type LabelRow, SPLITS, validate } from "../judge.ts";
 import { readAnalyticsSite, withAnalytics } from "./pages/layout.ts";
 import { labelsPage } from "./pages/labels.ts";
 import { scopesOf } from "./auth.ts";
@@ -213,6 +213,10 @@ export function startHub(o: HubOptions) {
         ((r as { human?: unknown }).human === "pass" ||
           (r as { human?: unknown }).human === "fail"),
     );
+    // An unknown split would show up as its own bucket, and "all" would count rows twice.
+    for (const r of rows)
+      if (r.split !== undefined && !SPLITS.includes(r.split))
+        throw new HttpError(400, "split must be train, dev or test");
     return scrub(rows);
   };
   /** The review page's write: a person's label replaces the stored one. */

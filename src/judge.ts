@@ -53,6 +53,9 @@ export function correctedFailRate(observed: number, tpr: number, tnr: number) {
   return Math.min(1, Math.max(0, (observed + tnr - 1) / denom));
 }
 
+/** The only split names a label may carry; "all" is computed, never stored. */
+export const SPLITS: readonly string[] = ["train", "dev", "test"];
+
 export function parseLabels(text: string): LabelRow[] {
   return text
     .split("\n")
@@ -65,6 +68,8 @@ export function parseLabels(text: string): LabelRow[] {
       if (r.judge !== undefined && r.judge !== "pass" && r.judge !== "fail")
         throw new Error(`line ${line}: judge must be "pass" or "fail"`);
       if (!r.case_id) throw new Error(`line ${line}: case_id missing`);
+      if (r.split !== undefined && !SPLITS.includes(r.split))
+        throw new Error(`line ${line}: split must be train, dev or test`);
       return r;
     });
 }

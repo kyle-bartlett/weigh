@@ -183,7 +183,7 @@ describe("labels upload after a finished run", () => {
         {
           level: "info",
           message:
-            "labels: 1 rows uploaded from labels.jsonl, 1 already on the hub left unchanged",
+            "labels: 1 rows uploaded from labels.jsonl, 1 already labelled (on the hub or earlier in the file) left unchanged",
         },
         {
           level: "info",

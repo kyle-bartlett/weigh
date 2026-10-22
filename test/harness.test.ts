@@ -97,6 +97,9 @@ describe("judge metrics", () => {
       '{"case_id":"a","human":"fail","split":"test"}\n{"case_id":"b","human":"pass"}\n{"case_id":"c","human":"pass"}\n',
     );
     expect(() => parseLabels('{"case_id":"a","human":"meh"}')).toThrow();
+    expect(() =>
+      parseLabels('{"case_id":"a","human":"pass","split":"all"}'),
+    ).toThrow("split must be train, dev or test");
     const v = validate(
       labels,
       (l) =>
