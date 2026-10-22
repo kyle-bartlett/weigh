@@ -193,6 +193,70 @@ export function startHub(o: HubOptions) {
     if (!run) throw new HttpError(404, "no such run");
     return run;
   };
+  const storeLabels = (
+    run: Run,
+    input: unknown,
+  ): { stored: number; total: number } => {
+    if (!Array.isArray(input))
+      throw new HttpError(400, "labels must be an array");
+    const rows = input.filter(
+      (
+        r,
+      ): r is {
+        case_id: string;
+        variant: string;
+        human: "pass" | "fail";
+        note?: string;
+        split?: string;
+      } =>
+        !!r &&
+        typeof r === "object" &&
+        typeof (r as { case_id?: unknown }).case_id === "string" &&
+        typeof (r as { variant?: unknown }).variant === "string" &&
+        ((r as { human?: unknown }).human === "pass" ||
+          (r as { human?: unknown }).human === "fail"),
+    );
+    store.upsertLabels(run, scrub(rows));
+    return { stored: rows.length, total: store.labels(run.key).length };
+  };
+  const validateJudge = (run: Run, check: string | undefined): JudgeRecord => {
+    if (!check || !run.meta?.checks.some((x) => x.id === check))
+      throw new HttpError(400, "check must name a check of this run");
+    const labels = store.labels(run.key);
+    if (!labels.length) throw new HttpError(409, "no labels on this run");
+    const byKey = new Map(
+      store.traces(run.key).map((l) => [`${l.variant}\u0000${l.case_id}`, l]),
+    );
+    const result = validate(labels as unknown as LabelRow[], (r) => {
+      const v = byKey.get(
+        `${r.variant ?? run.meta!.candidate}\u0000${r.case_id}`,
+      )?.checks[check];
+      return v === undefined ? undefined : v ? "pass" : "fail";
+    });
+    // A record that joined nothing would render as a validated grader with an empty table.
+    if (result.joined === 0)
+      throw new HttpError(
+        409,
+        `no label matched a verdict of ${check}; nothing stored`,
+      );
+    const record = {
+      ...result,
+      check,
+      labels: `hub:${run.key} (${labels.length} labels)`,
+      at: now(),
+    };
+    store.putJudges(run.key, [record]);
+    ingestSummary(run.key);
+    return record;
+  };
+  const needRunOwner = (c: Ctx, run: Run, agentId: unknown): void => {
+    if (c.scopes.has("admin")) return;
+    if (typeof agentId !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(agentId))
+      throw new HttpError(400, "agent_id must be a slug");
+    if (!run.agent_id || run.agent_id !== agentId)
+      throw new HttpError(403, "run belongs to another agent");
+  };
+
   const pickOf = (url: URL) => ({
     baseline: url.searchParams.get("baseline") || undefined,
     candidate: url.searchParams.get("candidate") || undefined,
@@ -543,26 +607,8 @@ export function startHub(o: HubOptions) {
     route("PUT", "/api/runs/:suite/:run/labels", async (c) => {
       need(c, "admin");
       const run = agentRun(c);
-      const b = (await readJson(c)) as { labels?: unknown[] };
-      const rows = (b.labels ?? []).filter(
-        (
-          r,
-        ): r is {
-          case_id: string;
-          variant: string;
-          human: "pass" | "fail";
-          note?: string;
-          split?: string;
-        } =>
-          !!r &&
-          typeof r === "object" &&
-          typeof (r as { case_id?: unknown }).case_id === "string" &&
-          typeof (r as { variant?: unknown }).variant === "string" &&
-          ((r as { human?: unknown }).human === "pass" ||
-            (r as { human?: unknown }).human === "fail"),
-      );
-      store.upsertLabels(run, scrub(rows));
-      return json({ stored: rows.length, total: store.labels(run.key).length });
+      const b = (await readJson(c)) as { labels?: unknown };
+      return json(storeLabels(run, b.labels ?? []));
     }),
     route("DELETE", "/api/runs/:suite/:run/labels/:case/:variant", (c) => {
       need(c, "admin");
@@ -578,35 +624,7 @@ export function startHub(o: HubOptions) {
       need(c, "admin");
       const run = agentRun(c);
       const b = (await readJson(c)) as { check?: string };
-      const check = b.check;
-      if (!check || !run.meta?.checks.some((x) => x.id === check))
-        throw new HttpError(400, "check must name a check of this run");
-      const labels = store.labels(run.key);
-      if (!labels.length) throw new HttpError(409, "no labels on this run");
-      const byKey = new Map(
-        store.traces(run.key).map((l) => [`${l.variant}\u0000${l.case_id}`, l]),
-      );
-      const result = validate(labels as unknown as LabelRow[], (r) => {
-        const v = byKey.get(
-          `${r.variant ?? run.meta!.candidate}\u0000${r.case_id}`,
-        )?.checks[check];
-        return v === undefined ? undefined : v ? "pass" : "fail";
-      });
-      // A record that joined nothing would render as a validated grader with an empty table.
-      if (result.joined === 0)
-        throw new HttpError(
-          409,
-          `no label matched a verdict of ${check}; nothing stored`,
-        );
-      const record = {
-        ...result,
-        check,
-        labels: `hub:${run.key} (${labels.length} labels)`,
-        at: now(),
-      };
-      store.putJudges(run.key, [record]);
-      ingestSummary(run.key);
-      return json(record);
+      return json(validateJudge(run, b.check));
     }),
     route("DELETE", "/api/runs/:suite/:run/judges/:check", (c) => {
       need(c, "admin");
@@ -837,6 +855,28 @@ export function startHub(o: HubOptions) {
         if (e) streams.broadcast(run.key, [e]);
       }
       return json({ cancel: run.cancel_requested });
+    }),
+
+    /** Admins or agents on their own claimed run may upload human labels. */
+    route("PUT", "/api/agent/runs/:suite/:run/labels", async (c) => {
+      if (!c.scopes.has("agent") && !c.scopes.has("admin"))
+        throw new HttpError(401, "unauthorized");
+      const run = agentRun(c);
+      const b = (await readJson(c)) as {
+        agent_id?: unknown;
+        labels?: unknown;
+      };
+      needRunOwner(c, run, b.agent_id);
+      return json(storeLabels(run, b.labels ?? []));
+    }),
+    /** Admins or agents on their own claimed run may validate its judges. */
+    route("POST", "/api/agent/runs/:suite/:run/judges/validate", async (c) => {
+      if (!c.scopes.has("agent") && !c.scopes.has("admin"))
+        throw new HttpError(401, "unauthorized");
+      const run = agentRun(c);
+      const b = (await readJson(c)) as { agent_id?: unknown; check?: string };
+      needRunOwner(c, run, b.agent_id);
+      return json(validateJudge(run, b.check));
     }),
 
     // agent API (also used by `weigh import`)

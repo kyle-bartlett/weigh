@@ -16,6 +16,15 @@ export const OUTPUT_RAW_CAP = 1 << 20;
 export const OUTPUT_KEEP = 256 << 10;
 export const EVENT_BATCH = 100;
 
+export class HubHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 export class HubClient {
   constructor(
     readonly base: string,
@@ -35,7 +44,8 @@ export class HubClient {
       headers: { authorization: `Bearer ${this.token}`, ...headers },
     });
     if (!res.ok)
-      throw new Error(
+      throw new HubHttpError(
+        res.status,
         `${method} ${path}: ${res.status} ${(await res.text()).slice(0, 200)}`,
       );
     return res;
@@ -137,6 +147,30 @@ export class HubClient {
       "PUT",
       `/api/agent/runs/${enc(suite)}/${enc(runId)}/judges`,
       { records },
+    );
+  }
+  putLabels(
+    suite: string,
+    runId: string,
+    agentId: string,
+    labels: unknown[],
+  ): Promise<{ stored: number; total: number }> {
+    return this.json(
+      "PUT",
+      `/api/agent/runs/${enc(suite)}/${enc(runId)}/labels`,
+      { agent_id: agentId, labels },
+    );
+  }
+  validateJudge(
+    suite: string,
+    runId: string,
+    agentId: string,
+    check: string,
+  ): Promise<Record<string, unknown>> {
+    return this.json(
+      "POST",
+      `/api/agent/runs/${enc(suite)}/${enc(runId)}/judges/validate`,
+      { agent_id: agentId, check },
     );
   }
   finish(suite: string, runId: string, status: RunStatus, exitCode?: number) {

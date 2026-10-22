@@ -2,8 +2,17 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HubClient, importRunDir } from "../src/agent/upload.ts";
+import {
+  EVENT_BATCH,
+  HubClient,
+  HubHttpError,
+  importRunDir,
+} from "../src/agent/upload.ts";
+import { eventsFromTraces } from "../src/events.ts";
+import { readMeta, readTraces } from "../src/run.ts";
 import { startHub } from "../src/hub/server.ts";
+import { runKey } from "../src/hub/store.ts";
+import { readJudges } from "../src/report/build.ts";
 
 const example = join(
   import.meta.dir,
@@ -333,6 +342,345 @@ describe("hub legacy summary replay", () => {
       .get(key);
     expect(stored?.payload_json).toBe(payloadJson);
     expect(JSON.parse(stored!.payload_json).html).toEqual(legacy.html);
+  });
+});
+
+describe("agent labels and judge validation", () => {
+  let hub: ReturnType<typeof startHub>;
+  let client: HubClient;
+  const dir = mkdtempSync(join(tmpdir(), "weigh-agent-labels-"));
+  const suite = "exchange-triage";
+  const check = "attribution_jev";
+  const rows: unknown[] = readFileSync(
+    join(import.meta.dir, "..", "suites", "exchange-triage.labels.jsonl"),
+    "utf8",
+  )
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line): unknown => JSON.parse(line));
+  const operations = [
+    { method: "PUT", suffix: "/labels", body: { labels: rows } },
+    { method: "POST", suffix: "/judges/validate", body: { check } },
+  ];
+  const call = (
+    method: string,
+    path: string,
+    body?: unknown,
+    token: string = T.agent,
+  ): Promise<Response> =>
+    fetch(hub.url + path, {
+      method,
+      headers: {
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        "content-type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const path = (runId: string, suffix: string, agent = true): string =>
+    `/api/${agent ? "agent/" : ""}runs/${suite}/${runId}${suffix}`;
+  const snapshot = (runId: string) => {
+    const key = runKey(suite, runId);
+    return {
+      labels: hub.store.labels(key),
+      judges: hub.store.judges(key),
+      run: hub.store.getRun(key),
+    };
+  };
+  const claimedRun = async (runId: string): Promise<void> => {
+    const queued = await call(
+      "POST",
+      "/api/runs",
+      {
+        project: "demo",
+        suite,
+        run_id: runId,
+      },
+      T.admin,
+    );
+    expect(queued.status).toBe(201);
+    const job = await client.claim("imac", 1);
+    expect(job?.run_id).toBe(runId);
+    expect(hub.store.getRun(runKey(suite, runId))?.agent_id).toBe("imac");
+    // The committed example has no events.jsonl; use the importer's trace replay fallback.
+    const events = eventsFromTraces(
+      { ...readMeta(example), run_id: runId },
+      readTraces(example).map((line) => ({ ...line, run_id: runId })),
+    );
+    for (let i = 0; i < events.length; i += EVENT_BATCH) {
+      const batch = events.slice(i, i + EVENT_BATCH);
+      // Ingest may store derived events next to the batch, so accepted can exceed its length.
+      expect(
+        (await client.postEvents(suite, runId, batch)).accepted,
+      ).toBeGreaterThanOrEqual(batch.length);
+    }
+    expect(hub.store.getRun(runKey(suite, runId))?.agent_id).toBe("imac");
+    expect(
+      hub.store
+        .traces(runKey(suite, runId))
+        .some(
+          (line) =>
+            line.run_id === runId && typeof line.checks[check] === "boolean",
+        ),
+    ).toBe(true);
+  };
+
+  beforeAll(async () => {
+    hub = startHub({ port: 0, dbPath: join(dir, "hub.db"), tokens: T });
+    client = new HubClient(hub.url, T.agent);
+    await client.register({
+      agent_id: "imac",
+      version: "t",
+      projects: [
+        {
+          id: "demo",
+          suites: [
+            {
+              name: suite,
+              path: "weigh/x.suite.ts",
+              description: "d",
+              info: {},
+            },
+          ],
+        },
+      ],
+    });
+    await claimedRun("owned");
+  });
+  afterAll(() => {
+    try {
+      hub?.stop();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("owner uploads labels and validates joined verdicts through both client methods", async () => {
+    const put = await call("PUT", path("owned", "/labels"), {
+      agent_id: "imac",
+      labels: [
+        ...rows,
+        null,
+        {},
+        { case_id: "bad", variant: "v", human: "maybe" },
+      ],
+    });
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({ stored: 54, total: 54 });
+    expect(snapshot("owned").labels).toHaveLength(54);
+    const validated = await call("POST", path("owned", "/judges/validate"), {
+      agent_id: "imac",
+      check,
+    });
+    expect(validated.status).toBe(200);
+    const record = (await validated.json()) as Record<string, unknown>;
+    expect(record.joined).toBe(54);
+    expect<unknown>(
+      snapshot("owned").judges.find((j) => j.check === check),
+    ).toEqual(record);
+    expect(await client.putLabels(suite, "owned", "imac", rows)).toEqual({
+      stored: 54,
+      total: 54,
+    });
+    const clientRecord = await client.validateJudge(
+      suite,
+      "owned",
+      "imac",
+      check,
+    );
+    expect(clientRecord.joined).toBe(54);
+    expect<unknown>(
+      snapshot("owned").judges.find((j) => j.check === check),
+    ).toEqual(clientRecord);
+  });
+
+  test("another agent and an unowned run reject both writes without side effects", async () => {
+    await client.createRun({ project: "demo", suite, run_id: "unowned" });
+    expect(snapshot("unowned").run?.agent_id).toBeFalsy();
+    for (const [runId, agentId] of [
+      ["owned", "other"],
+      ["unowned", "imac"],
+    ] as const) {
+      const before = snapshot(runId);
+      for (const op of operations) {
+        const response = await call(op.method, path(runId, op.suffix), {
+          ...op.body,
+          agent_id: agentId,
+        });
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual({
+          error: "run belongs to another agent",
+        });
+        expect(snapshot(runId)).toEqual(before);
+      }
+    }
+  });
+
+  test("read and anonymous callers get 401 before body or run validation", async () => {
+    const before = snapshot("owned");
+    for (const token of [T.read, ""]) {
+      for (const runId of ["owned", "missing"]) {
+        for (const op of operations) {
+          const response = await call(
+            op.method,
+            path(runId, op.suffix),
+            { agent_id: "Bad ID" },
+            token,
+          );
+          expect(response.status).toBe(401);
+          expect(await response.json()).toEqual({ error: "unauthorized" });
+          expect(snapshot("owned")).toEqual(before);
+          expect(snapshot("missing").run).toBeUndefined();
+        }
+      }
+    }
+  });
+
+  test("missing, malformed and non-string agent ids get 400 without writes", async () => {
+    const before = snapshot("owned");
+    for (const agentId of [
+      undefined,
+      null,
+      "",
+      "IMAC",
+      "-imac",
+      "im_ac",
+      123,
+      ["imac"],
+    ]) {
+      for (const op of operations) {
+        const response = await call(op.method, path("owned", op.suffix), {
+          ...op.body,
+          agent_id: agentId,
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error: "agent_id must be a slug",
+        });
+        expect(snapshot("owned")).toEqual(before);
+      }
+    }
+  });
+
+  test("authorized callers get 404 for a missing run without creating one", async () => {
+    const before = snapshot("owned");
+    for (const token of [T.agent, T.admin]) {
+      for (const op of operations) {
+        const response = await call(
+          op.method,
+          path("missing", op.suffix),
+          { ...op.body, agent_id: "imac" },
+          token,
+        );
+        expect(response.status).toBe(404);
+        expect(await response.json()).toEqual({ error: "no such run" });
+        expect(snapshot("missing").run).toBeUndefined();
+        expect(snapshot("missing").labels).toEqual([]);
+        expect(snapshot("missing").judges).toEqual([]);
+        expect(snapshot("owned")).toEqual(before);
+      }
+    }
+  });
+
+  test("admins bypass agent identity and ownership on the new routes", async () => {
+    const { run_id: runId } = await importRunDir(client, example, {
+      project: "demo",
+    });
+    expect(snapshot(runId).run?.agent_id).toBeFalsy();
+    for (const agentId of [undefined, "Bad ID", "other"]) {
+      const put = await call(
+        "PUT",
+        path(runId, "/labels"),
+        { agent_id: agentId, labels: rows },
+        T.admin,
+      );
+      expect(put.status).toBe(200);
+      expect(await put.json()).toEqual({ stored: 54, total: 54 });
+      expect(snapshot(runId).labels).toHaveLength(54);
+      const validated = await call(
+        "POST",
+        path(runId, "/judges/validate"),
+        { agent_id: agentId, check },
+        T.admin,
+      );
+      expect(validated.status).toBe(200);
+      const record = (await validated.json()) as Record<string, unknown>;
+      expect(record.joined).toBe(54);
+      expect<unknown>(
+        snapshot(runId).judges.find((j) => j.check === check),
+      ).toEqual(record);
+    }
+  });
+
+  test("unknown and missing checks return identical 400 errors on admin and agent routes", async () => {
+    const before = snapshot("owned");
+    for (const agent of [true, false]) {
+      for (const invalid of ["missing-check", "", undefined]) {
+        const response = await call(
+          "POST",
+          path("owned", "/judges/validate", agent),
+          { agent_id: "imac", check: invalid },
+          agent ? T.agent : T.admin,
+        );
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error: "check must name a check of this run",
+        });
+        expect(snapshot("owned")).toEqual(before);
+      }
+    }
+  });
+
+  test("both conflict paths preserve records and reach clients as HubHttpError 409", async () => {
+    await claimedRun("conflict");
+    await client.putJudges(suite, "conflict", readJudges(example));
+    for (const absent of [false, true]) {
+      if (absent) {
+        expect(
+          await client.putLabels(suite, "conflict", "imac", [
+            { case_id: "GOLD-01", variant: "absent", human: "pass" },
+          ]),
+        ).toEqual({ stored: 1, total: 1 });
+      }
+      const before = snapshot("conflict");
+      const message = absent
+        ? `no label matched a verdict of ${check}; nothing stored`
+        : "no labels on this run";
+      for (const agent of [true, false]) {
+        const response = await call(
+          "POST",
+          path("conflict", "/judges/validate", agent),
+          { agent_id: "imac", check },
+          agent ? T.agent : T.admin,
+        );
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({ error: message });
+        expect(snapshot("conflict")).toEqual(before);
+      }
+      const error: unknown = await client
+        .validateJudge(suite, "conflict", "imac", check)
+        .catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(HubHttpError);
+      if (!(error instanceof HubHttpError))
+        throw new Error("expected HubHttpError");
+      expect(error.status).toBe(409);
+      expect(error.message).toBe(
+        `POST ${path("conflict", "/judges/validate")}: 409 ${JSON.stringify({ error: message })}`,
+      );
+      expect(snapshot("conflict")).toEqual(before);
+    }
+  });
+
+  test("existing admin write routes still reject the agent token", async () => {
+    const before = snapshot("owned");
+    for (const op of operations) {
+      const response = await call(op.method, path("owned", op.suffix, false), {
+        ...op.body,
+        agent_id: "imac",
+      });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ error: "unauthorized" });
+      expect(snapshot("owned")).toEqual(before);
+    }
   });
 });
 
