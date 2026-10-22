@@ -322,8 +322,15 @@ describe("hub judge records", () => {
     expect((await judges()).map((j) => j.check)).toEqual([
       "attribution_claude",
     ]);
+    const before = (await (await call("GET", "")).json()) as {
+      last_seq: number;
+    };
     const again = await call("DELETE", "/judges/attribution_jev");
     expect(await again.json()).toEqual({ ok: true, removed: 0 });
+    const after = (await (await call("GET", "")).json()) as {
+      last_seq: number;
+    };
+    expect(after.last_seq).toBe(before.last_seq);
     const asRead = await fetch(
       hub.url + runPath + "/judges/attribution_claude",
       {
@@ -335,5 +342,77 @@ describe("hub judge records", () => {
     expect((await judges()).map((j) => j.check)).toEqual([
       "attribution_claude",
     ]);
+  });
+
+  test("agent uploads keep checked records and warn about dropped records without overwriting", async () => {
+    const { key } = (await (await call("GET", "")).json()) as { key: string };
+    const original = hub.store.judges(key)[0]!;
+    const upload = (records: unknown[]) =>
+      fetch(
+        hub.url + runPath.replace("/api/runs/", "/api/agent/runs/") + "/judges",
+        {
+          method: "PUT",
+          headers: {
+            authorization: `Bearer ${T.agent}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ records }),
+        },
+      );
+    const zero = { ...original, check: "zero_joined", joined: 0 };
+    const mixed = await upload([original, zero]);
+    expect(mixed.status).toBe(200);
+    expect(await mixed.json()).toEqual({
+      stored: 1,
+      dropped: [zero.check],
+      warn: "dropped 1 judge record(s) that joined no human label: zero_joined",
+    });
+    expect((await judges()).some((j) => j.check === zero.check)).toBe(false);
+    expect(hub.store.judges(key)).toEqual([original]);
+
+    const dropped = await upload([
+      { ...original, joined: 0 },
+      { ...original, check: "string_joined", joined: "1" },
+      { ...original, check: "missing_joined", joined: undefined },
+      { ...original, check: "negative_joined", joined: -1 },
+    ]);
+    expect(await dropped.json()).toEqual({
+      stored: 0,
+      dropped: [
+        original.check,
+        "string_joined",
+        "missing_joined",
+        "negative_joined",
+      ],
+      warn: `dropped 4 judge record(s) that joined no human label: ${original.check}, string_joined, missing_joined, negative_joined`,
+    });
+    expect(hub.store.judges(key)).toEqual([original]);
+    const kept = await upload([original, { check: "bad_shape" }]);
+    expect(await kept.json()).toEqual({ stored: 1 });
+  });
+
+  test("summary omits legacy zero-joined records stored directly", async () => {
+    const { key } = (await (await call("GET", "")).json()) as { key: string };
+    const before = hub.store.judges(key);
+    const zero = { ...before[0]!, check: "legacy_zero", joined: 0 };
+    hub.store.putJudges(key, [zero]);
+    try {
+      expect(await judges()).toEqual(before);
+      expect(hub.store.judges(key)).toContainEqual(zero);
+    } finally {
+      hub.store.deleteJudge(key, zero.check);
+    }
+  });
+
+  test("DELETE rejects malformed check, case and variant path parameters", async () => {
+    for (const [path, name] of [
+      ["/judges/%E0%A4%A", "check"],
+      ["/labels/%E0%A4%A/v3", "case"],
+      ["/labels/GOLD-01/%E0%A4%A", "variant"],
+    ]) {
+      const response = await call("DELETE", path!);
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain(`malformed ${name} in path`);
+    }
   });
 });

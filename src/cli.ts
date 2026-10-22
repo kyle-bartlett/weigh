@@ -384,6 +384,10 @@ export async function main(argv = process.argv.slice(2)) {
       const v = l?.checks[check];
       return v === undefined ? undefined : v ? "pass" : "fail";
     });
+    if (result.joined === 0)
+      throw new Error(
+        `no label matched a verdict of ${check}; judges.json not written`,
+      );
     console.log(
       "| split | n | human fails | human passes | TPR | TNR |\n|---|---|---|---|---|---|",
     );

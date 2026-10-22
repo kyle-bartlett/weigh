@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { buildFrom } from "../report/build.ts";
+import { buildFrom, checkedJudges } from "../report/build.ts";
 import { promptTokens } from "../types.ts";
 import { HttpError } from "./ingest.ts";
 import { runKey, type Store } from "./store.ts";
@@ -214,7 +214,8 @@ export const TOOLS: Tool[] = [
       required: ["run"],
     },
     schema: z.object({ run }),
-    run: (store, a) => store.judges(getRun(store, a.run as string).key),
+    run: (store, a) =>
+      checkedJudges(store.judges(getRun(store, a.run as string).key)),
   },
 ];
 

@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import {
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  existsSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -19,6 +26,7 @@ import {
 } from "../src/judge.ts";
 import { renderHtml } from "../src/report/html.ts";
 import { renderMarkdown } from "../src/report/md.ts";
+import { build } from "../src/report/build.ts";
 import { renderReview } from "../src/review.ts";
 import { readMeta, readTraces, runSuite } from "../src/run.ts";
 import { compare, gate } from "../src/stats.ts";
@@ -129,6 +137,73 @@ describe("transition matrix", () => {
 });
 
 describe("runner and reports", () => {
+  const example = join(
+    import.meta.dir,
+    "..",
+    "runs",
+    "examples",
+    "exchange-triage-2026-10-19",
+  );
+
+  test("reports omit zero-joined judges, including an empty validation section", () => {
+    const report = build(example);
+    const checked = { ...report.judges[0]!, check: "checked_judge" };
+    const zero = { ...checked, check: "zero_joined_judge", joined: 0 };
+    for (const render of [renderHtml, renderMarkdown]) {
+      const empty = render({ ...report, judges: [zero] });
+      expect(empty).not.toContain("Judge validation");
+      expect(empty).not.toContain(zero.check);
+      const mixed = render({ ...report, judges: [checked, zero] });
+      expect(mixed).toContain("Judge validation");
+      expect(mixed).toContain(checked.check);
+      expect(mixed).not.toContain(zero.check);
+    }
+  });
+
+  test("CLI rejects unmatched labels before printing or changing judges.json", () => {
+    const root = mkdtempSync(join(tmpdir(), "weigh-judge-cli-"));
+    try {
+      const meta = readMeta(example);
+      const runDir = join(root, meta.suite, meta.run_id);
+      cpSync(example, runDir, { recursive: true });
+      const path = join(runDir, "judges.json");
+      const before = readFileSync(path);
+      const check = "attribution_jev";
+      expect(meta.checks.some((c) => c.id === check)).toBe(true);
+      expect(JSON.parse(before.toString())[check].joined).toBeGreaterThan(0);
+      const labels = join(root, "labels.jsonl");
+      writeFileSync(
+        labels,
+        JSON.stringify({
+          case_id: "GOLD-01",
+          variant: "absent",
+          human: "pass",
+        }) + "\n",
+      );
+      const result = Bun.spawnSync(
+        [
+          "bun",
+          join(import.meta.dir, "..", "src", "cli.ts"),
+          "judge-validate",
+          meta.suite,
+          labels,
+          meta.run_id,
+          "--check",
+          check,
+        ],
+        { env: { ...process.env, WEIGH_RUNS: root } },
+      );
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr.toString()).toContain(
+        `no label matched a verdict of ${check}; judges.json not written`,
+      );
+      expect(result.stdout.toString()).toBe("");
+      expect(readFileSync(path)).toEqual(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   const suite: Suite = {
     name: "fake",
     description: "A fake suite for the harness test.",

@@ -119,6 +119,11 @@ describe("mcp", () => {
     expect(
       failing.data.every((r: { variant: string }) => r.variant === "v3"),
     ).toBe(true);
+    const key = "exchange-triage/2026-10-19-prompts";
+    const checked = hub.store.judges(key);
+    hub.store.putJudges(key, [
+      { ...checked[0]!, check: "legacy_zero", joined: 0 },
+    ]);
     const judges = await call("get_judges", {
       run: "exchange-triage/2026-10-19-prompts",
     });
@@ -126,6 +131,7 @@ describe("mcp", () => {
       "attribution_claude",
       "attribution_jev",
     ]);
+    expect(judges.data).toEqual(checked);
     const bad = await (
       await rpc(`/mcp/${T.read}`, {
         jsonrpc: "2.0",

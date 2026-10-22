@@ -1,4 +1,5 @@
 import type { ReportInput } from "./html.ts";
+import { checkedJudges } from "./build.ts";
 import { pct, signedPct } from "../stats.ts";
 
 const n0 = (x: number) =>
@@ -7,6 +8,7 @@ const n0 = (x: number) =>
 /** The Markdown summary that goes to the vault and the career log. Same numbers as the HTML, fewer words. */
 export function renderMarkdown(r: ReportInput): string {
   const { meta, cmp, gate } = r;
+  const judges = checkedJudges(r.judges ?? []);
   const B = cmp.baseline,
     C = cmp.candidate;
   const lines = [
@@ -44,12 +46,12 @@ export function renderMarkdown(r: ReportInput): string {
       : "No per-case regression.",
     "",
     `Paired cases: ${cmp.promptTokens.n}. Bootstrap 95% interval on the mean token difference: ${n0(cmp.promptTokens.ci.lo)} to ${n0(cmp.promptTokens.ci.hi)}. ${B.usage.metered && C.usage.metered ? "Tokens and cost metered from the provider's usage report." : "Some figures estimated; see the HTML report."}`,
-    ...(r.judges?.length
+    ...(judges.length
       ? [
           "",
           "## Judge validation",
           "",
-          ...r.judges.flatMap((j) => [
+          ...judges.flatMap((j) => [
             `**${j.check}** (${j.joined} labels matched, ${j.unmatched} unmatched)`,
             "",
             "| split | n | human fails | human passes | TPR | TNR |",

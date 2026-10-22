@@ -25,6 +25,10 @@ export type JudgeRecord = ReturnType<typeof validate> & {
 
 export type Pick = { baseline?: string; candidate?: string };
 
+// A record that joined no human label validated nothing.
+export const checkedJudges = <J extends { joined: number }>(judges: J[]): J[] =>
+  judges.filter((j) => j.joined > 0);
+
 export function buildFrom(
   metaIn: RunMeta & { case_order: string[] },
   lines: TraceLine[],

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RunStatus } from "../events.ts";
 import { newRunId } from "../run.ts";
-import { buildFrom, type JudgeRecord } from "../report/build.ts";
+import { buildFrom, checkedJudges, type JudgeRecord } from "../report/build.ts";
 import { renderHtml } from "../report/html.ts";
 import { renderMarkdown } from "../report/md.ts";
 import { scrub } from "../scrub.ts";
@@ -93,6 +93,16 @@ const route = (method: string, path: string, handler: Handler): Route => {
   );
   return { method, pattern, keys, handler };
 };
+
+function decodePathParam(value: string, name: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    if (error instanceof URIError)
+      throw new HttpError(400, `malformed ${name} in path`);
+    throw error;
+  }
+}
 
 export function startHub(o: HubOptions) {
   const analyticsSite = readAnalyticsSite();
@@ -477,7 +487,7 @@ export function startHub(o: HubOptions) {
         cmp: b.cmp,
         gate: b.gate,
         noise: b.noise,
-        judges: b.judges,
+        judges: checkedJudges(b.judges),
         meta: b.meta,
       });
     }),
@@ -559,8 +569,8 @@ export function startHub(o: HubOptions) {
       const run = agentRun(c);
       store.deleteLabel(
         run.key,
-        decodeURIComponent(c.params.case!),
-        decodeURIComponent(c.params.variant!),
+        decodePathParam(c.params.case!, "case"),
+        decodePathParam(c.params.variant!, "variant"),
       );
       return json({ ok: true });
     }),
@@ -603,9 +613,9 @@ export function startHub(o: HubOptions) {
       const run = agentRun(c);
       const removed = store.deleteJudge(
         run.key,
-        decodeURIComponent(c.params.check!),
+        decodePathParam(c.params.check!, "check"),
       );
-      ingestSummary(run.key);
+      if (removed > 0) ingestSummary(run.key);
       return json({ ok: true, removed });
     }),
 
@@ -933,11 +943,25 @@ export function startHub(o: HubOptions) {
       const records = (b.records ?? []).filter(
         (j) => j && typeof j.check === "string" && Array.isArray(j.splits),
       );
+      const kept = records.filter(
+        (j) => typeof j.joined === "number" && j.joined > 0,
+      );
+      const dropped = records
+        .filter((j) => !kept.includes(j))
+        .map((j) => j.check);
       const before = JSON.stringify(store.judges(run.key));
-      store.putJudges(run.key, scrub(records));
+      store.putJudges(run.key, scrub(kept));
       if (JSON.stringify(store.judges(run.key)) !== before)
         ingestSummary(run.key);
-      return json({ stored: records.length });
+      return json(
+        dropped.length
+          ? {
+              stored: kept.length,
+              dropped,
+              warn: `dropped ${dropped.length} judge record(s) that joined no human label: ${dropped.join(", ")}`,
+            }
+          : { stored: kept.length },
+      );
     }),
     route("POST", "/api/agent/runs/:suite/:run/finish", async (c) => {
       if (!c.scopes.has("agent") && !c.scopes.has("admin"))

@@ -4,6 +4,7 @@ import type { RunMeta, TraceLine } from "../types.ts";
 import { promptTokens } from "../types.ts";
 import { matrix, fromTraces, cell as mcell } from "../transition.ts";
 import type { validate } from "../judge.ts";
+import { checkedJudges } from "./build.ts";
 
 /**
  * The single-file report. Same design language as Kyle's portfolio: grey-green neutrals, Bricolage
@@ -303,8 +304,9 @@ export function judgeTable(
 }
 
 export function judgeSection(r: ReportInput): string {
-  return r.judges?.length
-    ? `<section><div class="sec-head"><h2 class="display">Judge validation</h2><p>Each judge check is a classifier. Its verdicts count only as far as they agree with a person's labels on a split it never saw. Positive means a failure is present. TPR is the share of human-labelled failures the judge caught; TNR the share of human-labelled passes it left alone. Two judges on the same property can be compared row for row.</p></div>${r.judges.map(judgeTable).join("")}</section>`
+  const judges = checkedJudges(r.judges ?? []);
+  return judges.length
+    ? `<section><div class="sec-head"><h2 class="display">Judge validation</h2><p>Each judge check is a classifier. Its verdicts count only as far as they agree with a person's labels on a split it never saw. Positive means a failure is present. TPR is the share of human-labelled failures the judge caught; TNR the share of human-labelled passes it left alone. Two judges on the same property can be compared row for row.</p></div>${judges.map(judgeTable).join("")}</section>`
     : "";
 }
 
