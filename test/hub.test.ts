@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HubClient, importRunDir } from "../src/agent/upload.ts";
@@ -265,6 +265,74 @@ describe("hub", () => {
     expect((await get("/nope")).status).toBe(404);
     expect((await get("/mcp")).status).toBe(405);
     expect((await get("/healthz")).status).toBe(200);
+  });
+});
+
+describe("hub legacy summary replay", () => {
+  let hub: ReturnType<typeof startHub>;
+  let tmp: string;
+  beforeAll(() => {
+    tmp = mkdtempSync(join(tmpdir(), "weigh-hub-legacy-"));
+    hub = startHub({ port: 0, dbPath: join(tmp, "hub.db"), tokens: T });
+  });
+  afterAll(() => {
+    hub?.stop();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test("omits pre-#7 HTML from SSE without rewriting the stored summary", async () => {
+    const suite = "legacy";
+    const runId = "old-run";
+    const key = `${suite}/${runId}`;
+    hub.store.upsertProject({ id: "legacy", public: true });
+    hub.store.createRun({
+      key,
+      project_id: "legacy",
+      suite,
+      run_id: runId,
+      status: "finished",
+    });
+    const legacy = {
+      type: "summary",
+      cmp: { baseline: "a", candidate: "b" },
+      gate: { pass: true, reasons: [] },
+      paired_n: 2,
+      at: "2026-10-19T00:00:00.000Z",
+      html: {
+        verdict: "<b>v</b>",
+        proof: "<p>p</p>",
+        checks: "<table></table>",
+      },
+    };
+    const payloadJson = JSON.stringify(legacy);
+    hub.store.db.run(
+      "INSERT INTO events (run_key, seq, source, src_seq, type, at, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [key, 1, "hub", 1, legacy.type, legacy.at, payloadJson],
+    );
+    const response = await fetch(
+      `${hub.url}/api/runs/${suite}/${runId}/events`,
+      { headers: { authorization: `Bearer ${T.read}` } },
+    );
+    expect(response.status).toBe(200);
+    const summary = (await response.text())
+      .split("\n\n")
+      .find((frame) => /^event: summary$/m.test(frame));
+    expect(summary).toBeDefined();
+    const payload: Record<string, unknown> = JSON.parse(
+      summary!.match(/^data: (.+)$/m)![1]!,
+    );
+    expect(payload).not.toHaveProperty("html");
+    expect(payload.cmp).toEqual(legacy.cmp);
+    expect(payload.gate).toEqual(legacy.gate);
+    expect(payload.paired_n).toBe(legacy.paired_n);
+    const stored = hub.store.db
+      .query<
+        { payload_json: string },
+        [string]
+      >("SELECT payload_json FROM events WHERE run_key = ? AND seq = 1")
+      .get(key);
+    expect(stored?.payload_json).toBe(payloadJson);
+    expect(JSON.parse(stored!.payload_json).html).toEqual(legacy.html);
   });
 });
 

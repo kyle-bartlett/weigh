@@ -212,6 +212,8 @@ export async function startAgent(
       log("warn", `claim: ${msg.slice(0, 200)}`);
       // A redeployed hub forgot this agent: register again on the next loop instead of waiting it out.
       if (msg.includes("register first")) needRegister = true;
+      // Once mode retries "register first" so a redeployed hub can recover registration.
+      else if (opts.once) return;
       await Bun.sleep(opts.retryDelayMs ?? 5000);
       continue;
     }

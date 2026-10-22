@@ -37,8 +37,18 @@ export class Streams {
     const run = store.getRun(key);
     if (!run) return new Response("not found", { status: 404 });
     const enc = new TextEncoder();
-    const frame = (e: StoredEvent) =>
-      `id: ${e.seq}\nevent: ${e.event.type}\ndata: ${JSON.stringify({ ...e.event, seq: e.seq, source: e.source })}\n\n`;
+    const frame = (e: StoredEvent) => {
+      const payload: Record<string, unknown> = {
+        ...e.event,
+        seq: e.seq,
+        source: e.source,
+      };
+      if (e.event.type === "summary") {
+        // Pre-#7 rows contain HTML that must stay out of replay and live frames.
+        delete payload.html;
+      }
+      return `id: ${e.seq}\nevent: ${e.event.type}\ndata: ${JSON.stringify(payload)}\n\n`;
+    };
     let cleanup = () => {};
     const stream = new ReadableStream<Uint8Array>({
       start: (ctrl) => {

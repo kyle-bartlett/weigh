@@ -6,6 +6,7 @@ import {
   describe,
   expect,
   setDefaultTimeout,
+  spyOn,
   test,
 } from "bun:test";
 import {
@@ -13,11 +14,13 @@ import {
   mkdtempSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startAgent } from "../src/agent/main.ts";
+import { HubClient } from "../src/agent/upload.ts";
 import { startHub } from "../src/hub/server.ts";
 
 // Subprocess runs use the same budget as `bun test --timeout 60000`.
@@ -49,6 +52,7 @@ describe("agent re-registration", () => {
     projects: { id: string; suites: { name: string }[] }[];
   };
   let stub: ReturnType<typeof Bun.serve>;
+  let tmp: string;
   let checkout: string;
   let config: string;
   let events: string[];
@@ -65,7 +69,7 @@ describe("agent re-registration", () => {
     delete process.env.WEIGH_AGENT_TOKEN;
   });
   beforeEach(() => {
-    const tmp = mkdtempSync(join(tmpdir(), "weigh-agent-reregister-"));
+    tmp = mkdtempSync(join(tmpdir(), "weigh-agent-reregister-"));
     checkout = join(tmp, "demo-repo");
     const init = Bun.spawnSync([
       "bun",
@@ -138,6 +142,7 @@ describe("agent re-registration", () => {
     stub.stop(true);
     if (existsSync(`${checkout}-moved`))
       renameSync(`${checkout}-moved`, checkout);
+    rmSync(tmp, { recursive: true, force: true });
   });
 
   const once = () =>
@@ -209,6 +214,78 @@ describe("agent re-registration", () => {
   });
 });
 
+describe("agent once with an unavailable hub", () => {
+  let tmp: string;
+  let previousToken: string | undefined;
+
+  beforeAll(() => {
+    tmp = mkdtempSync(join(tmpdir(), "weigh-agent-offline-"));
+    previousToken = process.env.WEIGH_AGENT_TOKEN;
+    process.env.WEIGH_AGENT_TOKEN = T.agent;
+  });
+  afterAll(() => {
+    if (previousToken === undefined) delete process.env.WEIGH_AGENT_TOKEN;
+    else process.env.WEIGH_AGENT_TOKEN = previousToken;
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test("settles after a failed claim instead of retrying forever", async () => {
+    const checkout = join(tmp, "demo-repo");
+    const init = Bun.spawnSync([
+      "bun",
+      join(ROOT, "src", "cli.ts"),
+      "init",
+      checkout,
+      "--name",
+      "demo",
+    ]);
+    if (init.exitCode !== 0) throw new Error(init.stderr.toString());
+    const s = Bun.serve({ port: 0, fetch: () => new Response() });
+    const port = s.port;
+    s.stop(true);
+    const config = join(tmp, "agent.json");
+    writeFileSync(
+      config,
+      JSON.stringify({
+        hub: `http://127.0.0.1:${port}`,
+        agent_id: "test-agent",
+        weigh_home: ROOT,
+        workdir: join(tmp, "work"),
+        runs_dir: join(tmp, "runs"),
+        projects: [{ id: "demo", path: checkout, pull: false }],
+        poll_wait_s: 1,
+      }),
+    );
+    // Reach the claim seam instead of rejecting during startup registration.
+    const register = spyOn(HubClient.prototype, "register").mockResolvedValue({
+      projects: 1,
+      suites: 1,
+    });
+    const lines: string[] = [];
+    try {
+      const agent = startAgent(config, {
+        once: true,
+        retryDelayMs: 10,
+        log: (line) => lines.push(line),
+      }).then(
+        () => "resolved",
+        () => "rejected",
+      );
+      const outcome = await Promise.race([
+        agent,
+        Bun.sleep(5000).then(() => "timeout"),
+      ]);
+      expect(outcome).toBe("resolved");
+      expect(register).toHaveBeenCalled();
+      expect(
+        lines.filter((line) => line.startsWith("[warn] claim:")),
+      ).toHaveLength(1);
+    } finally {
+      register.mockRestore();
+    }
+  });
+});
+
 describe("agent", () => {
   let hub: ReturnType<typeof startHub>;
   let tmp: string;
@@ -264,6 +341,7 @@ describe("agent", () => {
   });
   afterAll(() => {
     hub.stop();
+    rmSync(tmp, { recursive: true, force: true });
     delete process.env.WEIGH_AGENT_TOKEN;
   });
 
