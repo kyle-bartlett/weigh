@@ -113,6 +113,19 @@ export const SuiteSchema = z
     skipped: isFn.optional(),
   })
   .superRefine((s, ctx) => {
+    for (const [i, variant] of s.variants.entries()) {
+      const reason = /[\u2013\u2014]/.test(variant.name)
+        ? "contains an en dash or em dash"
+        : /\+\s*$/.test(variant.name)
+          ? 'ends with "+"'
+          : undefined;
+      if (reason)
+        ctx.addIssue({
+          code: "custom",
+          path: ["variants", i, "name"],
+          message: `variant "${variant.name}" in suite "${s.name}" ${reason}; rename it (variant names may not contain an en dash or em dash or end with "+")`,
+        });
+    }
     const names = new Set(s.variants.map((v) => v.name));
     for (const k of ["baseline", "candidate", "noise"] as const) {
       const v = s[k];
