@@ -6,7 +6,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import { timelineSchema } from "./timeline.ts";
 import { readLabels, validate } from "./judge.ts";
@@ -109,6 +109,14 @@ export const SuiteSchema = z
       .optional(),
     noise: z.string().optional(),
     moneyFields: z.array(z.string().min(1)).optional(),
+    labels: z
+      .string()
+      .min(1)
+      .refine(
+        (p) => !isAbsolute(p),
+        "must be a path relative to the repo, not absolute",
+      )
+      .optional(),
     concurrency: z.number().int().positive().optional(),
     inputText: isFn.optional(),
     skipped: isFn.optional(),

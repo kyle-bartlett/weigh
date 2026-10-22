@@ -238,6 +238,7 @@ export async function startAgent(
           const status = await runJob({
             hub,
             job,
+            agentId: c.agent_id,
             suiteFile: join(dir, job.suite_path),
             checkout: dir,
             runsDir: c.runs_dir,

@@ -7,13 +7,20 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseEvent, type RunEvent, type RunStatus } from "../events.ts";
+import { parseLabels, type LabelRow } from "../judge.ts";
 import { readJudges } from "../report/build.ts";
+import { readMeta, readTraces } from "../run.ts";
 import { scrub, scrubText } from "../scrub.ts";
 import type { TraceLine } from "../types.ts";
 import type { Log } from "./checkout.ts";
-import { shortCommand, type HubClient, type Job } from "./upload.ts";
+import {
+  HubHttpError,
+  shortCommand,
+  type HubClient,
+  type Job,
+} from "./upload.ts";
 
 /**
  * One job: spawn the Weigh CLI on the suite, tail its events.jsonl to the hub in order, upload each
@@ -24,6 +31,7 @@ import { shortCommand, type HubClient, type Job } from "./upload.ts";
 export interface RunnerOptions {
   hub: HubClient;
   job: Job;
+  agentId: string;
   suiteFile: string;
   checkout: string;
   runsDir: string;
@@ -190,6 +198,147 @@ function prepare(e: RunEvent, base: number): RunEvent {
   return out;
 }
 
+/** Uploaded row count and per-judge results, or a reason the upload was skipped. */
+export type LabelsOutcome =
+  | {
+      uploaded: number;
+      validated: string[];
+      skipped: { check: string; reason: string }[];
+    }
+  | { skipped: string };
+
+function labelsMessage(hub: HubClient, value: unknown): string {
+  const message = String(value instanceof Error ? value.message : value);
+  return scrubText(
+    hub.token ? message.replaceAll(hub.token, "<redacted>") : message,
+  ).slice(0, 500);
+}
+
+/** Label operations are best effort: transient errors get at most three attempts. */
+async function retryLabels<T>(
+  fn: () => Promise<T>,
+  log: Log,
+  what: string,
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (attempt === 3 || (e instanceof HubHttpError && e.status < 500))
+        throw e;
+      const delay = attempt * 500;
+      log("warn", `${what}: transient failure; retry in ${delay}ms`);
+      await Bun.sleep(delay);
+    }
+  }
+}
+
+/** Upload declared labels and validate only judges with a recorded verdict. Never fails the run. */
+export async function uploadLabels(o: {
+  hub: HubClient;
+  job: { suite: string; run_id: string };
+  agentId: string;
+  checkout: string;
+  runDir: string;
+  log: Log;
+}): Promise<LabelsOutcome> {
+  const { hub, job, agentId, checkout, runDir } = o;
+  const log: Log = (level, message) =>
+    o.log(level, labelsMessage(hub, message));
+  try {
+    if (!existsSync(join(runDir, "run.json")))
+      return { skipped: "run.json missing" };
+    const meta = readMeta(runDir);
+    if (meta.labels === undefined) return { skipped: "no labels declared" };
+    const path = resolve(checkout, meta.labels);
+    const local = relative(checkout, path);
+    if (local.startsWith("..") || isAbsolute(local)) {
+      log(
+        "warn",
+        `labels path ${meta.labels} is outside the checkout; skipped`,
+      );
+      return { skipped: "labels path outside the checkout" };
+    }
+    if (!existsSync(path)) {
+      log(
+        "warn",
+        `labels file ${meta.labels} not found in the checkout; skipped`,
+      );
+      return { skipped: "labels file not found" };
+    }
+    let rows: LabelRow[];
+    try {
+      rows = scrub(
+        parseLabels(readFileSync(path, "utf8")).map((row) => ({
+          ...row,
+          variant: row.variant ?? meta.candidate,
+        })),
+      );
+    } catch (e) {
+      log(
+        "warn",
+        `labels file ${meta.labels}: ${labelsMessage(hub, e)}; skipped`,
+      );
+      return { skipped: "labels file could not be parsed" };
+    }
+    let uploaded: number;
+    try {
+      const result = await retryLabels(
+        () => hub.putLabels(job.suite, job.run_id, agentId, rows),
+        log,
+        "labels upload",
+      );
+      uploaded = result.stored;
+      log("info", `labels: ${uploaded} rows uploaded from ${meta.labels}`);
+    } catch (e) {
+      log(
+        "warn",
+        `labels upload: ${labelsMessage(hub, e)}; validation skipped`,
+      );
+      return { skipped: "labels upload failed" };
+    }
+    const outcome: LabelsOutcome = { uploaded, validated: [], skipped: [] };
+    const traces = readTraces(runDir);
+    for (const check of meta.checks) {
+      if (check.kind !== "judge") continue;
+      if (!traces.some((line) => typeof line.checks[check.id] === "boolean")) {
+        log(
+          "info",
+          `judge ${check.id}: no verdict in the traces; validation skipped`,
+        );
+        outcome.skipped.push({
+          check: check.id,
+          reason: "no verdict in the traces",
+        });
+        continue;
+      }
+      try {
+        const result = await retryLabels(
+          () => hub.validateJudge(job.suite, job.run_id, agentId, check.id),
+          log,
+          `judge ${check.id}`,
+        );
+        log(
+          "info",
+          `judge ${check.id}: validated (${result.joined} labels joined)`,
+        );
+        outcome.validated.push(check.id);
+      } catch (e) {
+        const reason =
+          e instanceof HubHttpError && e.status === 409
+            ? `hub refused validation (409 ${labelsMessage(hub, e)})`
+            : `validation failed (${labelsMessage(hub, e)})`;
+        log("warn", `judge ${check.id}: ${reason}; skipped`);
+        outcome.skipped.push({ check: check.id, reason });
+      }
+    }
+    return outcome;
+  } catch (e) {
+    log("warn", `labels: ${labelsMessage(hub, e)}; skipped`);
+    return { skipped: "unexpected labels error" };
+  }
+}
+
 export async function runJob(o: RunnerOptions): Promise<RunStatus> {
   const { hub, job, log } = o;
   const runDir = join(o.runsDir, job.suite, job.run_id);
@@ -266,6 +415,20 @@ export async function runJob(o: RunnerOptions): Promise<RunStatus> {
       `runner exited ${code}: ${tailOf(join(runDir, "runner.log"))}`,
     );
   await syncRunDir(hub, job, runDir, log, { final: status });
+  if (status === "finished") {
+    try {
+      await uploadLabels({
+        hub,
+        job,
+        agentId: o.agentId,
+        checkout: o.checkout,
+        runDir,
+        log,
+      });
+    } catch (e) {
+      log("warn", `labels: ${labelsMessage(hub, e)}; skipped`);
+    }
+  }
   return status;
 }
 

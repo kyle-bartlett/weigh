@@ -113,6 +113,8 @@ export interface Suite {
   noise?: string;
   /** Answer fields holding US dollar amounts. The case page shows them with a dollar sign and thousands separators. Default: tiv and targetPremium. */
   moneyFields?: string[];
+  /** Labels JSONL path relative to the root of the suite's repo checkout. After a finished run, the agent uploads it and validates each judge check with a verdict. */
+  labels?: string;
   /** Parallel variant runs. Default 2. */
   concurrency?: number;
   /** Short text of a case for the review page. Default: the input as JSON, trimmed to 4,000 characters. */
@@ -160,5 +162,7 @@ export interface RunMeta {
   noise?: string;
   /** Answer fields holding US dollar amounts for case page formatting. */
   moneyFields?: string[];
+  /** Labels JSONL path relative to the root of the suite's repo checkout. After a finished run, the agent uploads it and validates each judge check with a verdict. */
+  labels?: string;
   command: string;
 }

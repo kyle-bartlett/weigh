@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ const rule =
   'variant names may not contain an en dash or em dash or end with "+"';
 
 interface SuiteText {
+  labels?: string;
   description?: string;
   variantDescriptions?: readonly string[];
   checks?: readonly { id: string; description: string }[];
@@ -35,6 +36,7 @@ function suiteFile(names: string[], text: SuiteText = {}): string {
       })),
       ${text.skipped ? `skipped: () => ${JSON.stringify(text.skipped)},` : ""}
       ${text.timeline ? `timeline: ${JSON.stringify(text.timeline)},` : ""}
+      ${text.labels !== undefined ? `labels: ${JSON.stringify(text.labels)},` : ""}
       baseline: ${JSON.stringify(names[0])},
       candidate: ${JSON.stringify(names[1])}
     };`,
@@ -42,7 +44,7 @@ function suiteFile(names: string[], text: SuiteText = {}): string {
   return file;
 }
 
-afterEach(() => {
+afterAll(() => {
   for (const dir of dirs.splice(0))
     rmSync(dir, { recursive: true, force: true });
 });
@@ -66,6 +68,37 @@ async function freshRun() {
 describe("suite text", () => {
   const textRule =
     'suite text may not contain an en dash or em dash or a number followed by "+"';
+
+  test("labels accepts relative paths without text rules and rejects absolute or empty paths", async () => {
+    for (const labels of [
+      "weigh/labels/x.jsonl",
+      "weigh/labels/300+\u2014x.jsonl",
+    ]) {
+      expect(
+        (await loadSuite(suiteFile(["v2", "v3"], { labels }))).labels,
+      ).toBe(labels);
+    }
+    for (const labels of ["/tmp/labels.jsonl", ""]) {
+      await expect(
+        loadSuite(suiteFile(["v2", "v3"], { labels })),
+      ).rejects.toThrow("labels:");
+    }
+  });
+
+  test("run metadata records labels and rescore refreshes or removes the declaration", async () => {
+    const suite = await loadSuite(
+      suiteFile(["v2", "v3"], { labels: "weigh/labels/x.jsonl" }),
+    );
+    const { runSuite, readMeta, rescore } = await freshRun();
+    const dir = await runSuite(suite, { runId: "labels", log: () => {} });
+    expect(readMeta(dir).labels).toBe(suite.labels);
+    suite.labels = "weigh/labels/new.jsonl";
+    await rescore(suite, dir);
+    expect(readMeta(dir).labels).toBe(suite.labels);
+    delete suite.labels;
+    await rescore(suite, dir);
+    expect(readMeta(dir).labels).toBeUndefined();
+  });
 
   test.each([
     {

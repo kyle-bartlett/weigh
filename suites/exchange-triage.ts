@@ -593,6 +593,7 @@ const suite: Suite = {
   candidate: "v3",
   noise: "v2-repeat",
   moneyFields: ["tiv", "targetPremium"],
+  labels: "suites/exchange-triage.labels.jsonl",
   gate: {
     maxPassAllDrop: 0,
     noRegressionOn: ["decision_correct", "fields_correct"],

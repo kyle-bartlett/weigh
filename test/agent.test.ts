@@ -11,6 +11,7 @@ import {
 } from "bun:test";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   renameSync,
@@ -20,13 +21,350 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startAgent } from "../src/agent/main.ts";
+import { runJob, uploadLabels } from "../src/agent/runner.ts";
 import { HubClient } from "../src/agent/upload.ts";
+import type { Log } from "../src/agent/checkout.ts";
 import { startHub } from "../src/hub/server.ts";
+import { runKey } from "../src/hub/store.ts";
+import type { LabelRow } from "../src/judge.ts";
 
 // Subprocess runs use the same budget as `bun test --timeout 60000`.
 setDefaultTimeout(60_000);
 const ROOT = join(import.meta.dir, "..");
 const T = { admin: "admin-token", agent: "agent-token", read: "read-token" };
+
+describe("labels upload after a finished run", () => {
+  type Request = {
+    method: string;
+    path: string;
+    body: { agent_id: string; labels?: LabelRow[]; check?: string };
+  };
+  let tmp: string;
+  let checkout: string;
+  let runDir: string;
+  let stub: ReturnType<typeof Bun.serve>;
+  let realHub: ReturnType<typeof startHub> | undefined;
+  let client: HubClient;
+  let requests: Request[];
+  let logs: { level: string; message: string }[];
+  let putStatuses: number[];
+  let judgeStatuses: Record<string, number[]>;
+  const log: Log = (level, message) => logs.push({ level, message });
+  const rows: LabelRow[] = [
+    { case_id: "c1", human: "pass", note: "reviewed" },
+    {
+      case_id: "c2",
+      variant: "b",
+      human: "fail",
+      note: `Bearer ${"x".repeat(24)}`,
+    },
+  ];
+  const meta = (labels: string | undefined = "labels.jsonl") => ({
+    labels,
+    candidate: "b",
+    checks: [
+      { id: "exact", kind: "code" },
+      { id: "judge_a", kind: "judge" },
+      { id: "judge_b", kind: "judge" },
+      { id: "judge_silent", kind: "judge" },
+    ],
+  });
+  const upload = () =>
+    uploadLabels({
+      hub: client,
+      job: { suite: "demo", run_id: "r1" },
+      agentId: "imac",
+      checkout,
+      runDir,
+      log,
+    });
+
+  beforeAll(() => {
+    tmp = mkdtempSync(join(tmpdir(), "weigh-label-upload-"));
+    checkout = join(tmp, "checkout");
+    runDir = join(tmp, "run");
+    mkdirSync(checkout);
+    mkdirSync(runDir);
+    stub = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const path = new URL(req.url).pathname;
+        const body = (await req.json()) as Request["body"];
+        requests.push({ method: req.method, path, body });
+        if (req.method === "PUT" && path.endsWith("/labels")) {
+          const status = putStatuses.shift() ?? 200;
+          return status === 200
+            ? Response.json({
+                stored: body.labels!.length,
+                total: body.labels!.length,
+              })
+            : new Response(`upload failed ${T.agent}`, { status });
+        }
+        const check = body.check!;
+        const status =
+          judgeStatuses[check]?.shift() ?? (check === "judge_b" ? 409 : 200);
+        return status === 200
+          ? Response.json({ joined: 2, check })
+          : new Response(
+              status === 409
+                ? `no label matched a verdict of ${check}; nothing stored`
+                : `validation failed ${T.agent}`,
+              { status },
+            );
+      },
+    });
+    client = new HubClient(stub.url.toString(), T.agent);
+  });
+  beforeEach(() => {
+    requests = [];
+    logs = [];
+    putStatuses = [];
+    judgeStatuses = {};
+    writeFileSync(join(runDir, "run.json"), JSON.stringify(meta()));
+    writeFileSync(
+      join(runDir, "traces.jsonl"),
+      JSON.stringify({
+        case_id: "c1",
+        variant: "b",
+        checks: { exact: true, judge_a: true, judge_b: false },
+        unanswered: ["judge_silent"],
+      }) + "\n",
+    );
+    writeFileSync(
+      join(checkout, "labels.jsonl"),
+      rows.map((row) => JSON.stringify(row)).join("\n"),
+    );
+  });
+  afterAll(() => {
+    stub?.stop(true);
+    realHub?.stop();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test("uploads scrubbed rows with candidate defaults, validates verdicts, and skips silent and refused judges", async () => {
+    const outcome = await upload();
+    expect(requests).toEqual([
+      {
+        method: "PUT",
+        path: "/api/agent/runs/demo/r1/labels",
+        body: {
+          agent_id: "imac",
+          labels: [
+            { case_id: "c1", variant: "b", human: "pass", note: "reviewed" },
+            {
+              case_id: "c2",
+              variant: "b",
+              human: "fail",
+              note: "Bearer <redacted>",
+            },
+          ],
+        },
+      },
+      ...["judge_a", "judge_b"].map((check) => ({
+        method: "POST",
+        path: "/api/agent/runs/demo/r1/judges/validate",
+        body: { agent_id: "imac", check },
+      })),
+    ]);
+    expect(outcome).toMatchObject({
+      uploaded: 2,
+      validated: ["judge_a"],
+      skipped: [
+        { check: "judge_b", reason: expect.stringContaining("409") },
+        { check: "judge_silent", reason: "no verdict in the traces" },
+      ],
+    });
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        { level: "info", message: "labels: 2 rows uploaded from labels.jsonl" },
+        {
+          level: "info",
+          message: "judge judge_a: validated (2 labels joined)",
+        },
+        {
+          level: "info",
+          message:
+            "judge judge_silent: no verdict in the traces; validation skipped",
+        },
+        {
+          level: "warn",
+          message: expect.stringMatching(/judge_b:.*409.*skipped/),
+        },
+      ]),
+    );
+  });
+
+  test("escaping and missing labels paths each warn once without contacting the hub", async () => {
+    for (const [labels, reason] of [
+      ["../x.jsonl", "outside the checkout"],
+      ["missing.jsonl", "not found in the checkout"],
+    ]) {
+      logs = [];
+      writeFileSync(join(runDir, "run.json"), JSON.stringify(meta(labels)));
+      expect(await upload()).toHaveProperty("skipped");
+      expect(logs).toEqual([
+        { level: "warn", message: expect.stringContaining(reason!) },
+      ]);
+      expect(requests).toHaveLength(0);
+    }
+  });
+
+  test("absent metadata or declaration is quiet and malformed files warn without requests", async () => {
+    rmSync(join(runDir, "run.json"));
+    expect(await upload()).toEqual({ skipped: "run.json missing" });
+    writeFileSync(
+      join(runDir, "run.json"),
+      JSON.stringify({ ...meta(), labels: undefined }),
+    );
+    expect(await upload()).toEqual({ skipped: "no labels declared" });
+    expect(logs).toHaveLength(0);
+    writeFileSync(join(runDir, "run.json"), JSON.stringify(meta()));
+    writeFileSync(
+      join(checkout, "labels.jsonl"),
+      '{"case_id":"c1","human":"maybe"}',
+    );
+    expect(await upload()).toEqual({
+      skipped: "labels file could not be parsed",
+    });
+    expect(logs).toEqual([
+      { level: "warn", message: expect.stringContaining("human must be") },
+    ]);
+    logs = [];
+    writeFileSync(join(runDir, "run.json"), "{");
+    expect(await upload()).toEqual({ skipped: "unexpected labels error" });
+    expect(logs).toEqual([
+      { level: "warn", message: expect.stringMatching(/labels:.*skipped/) },
+    ]);
+    expect(requests).toHaveLength(0);
+  });
+
+  test("retries transient failures at most three times, stops on 4xx, and continues after a judge fails", async () => {
+    for (const [status, attempts] of [
+      [503, 3],
+      [403, 1],
+    ] as const) {
+      requests = [];
+      putStatuses = Array(attempts).fill(status);
+      expect(await upload()).toEqual({ skipped: "labels upload failed" });
+      expect(requests).toHaveLength(attempts);
+      expect(requests.every((request) => request.method === "PUT")).toBe(true);
+    }
+    requests = [];
+    putStatuses = [503, 200];
+    judgeStatuses = { judge_a: [503, 503, 503], judge_b: [200] };
+    expect(await upload()).toMatchObject({
+      uploaded: 2,
+      validated: ["judge_b"],
+      skipped: [
+        {
+          check: "judge_a",
+          reason: expect.stringContaining("validation failed"),
+        },
+        { check: "judge_silent" },
+      ],
+    });
+    expect(requests.filter((r) => r.method === "PUT")).toHaveLength(2);
+    expect(requests.filter((r) => r.body.check === "judge_a")).toHaveLength(3);
+    expect(requests.filter((r) => r.body.check === "judge_b")).toHaveLength(1);
+    expect(logs.some((entry) => entry.message.includes(T.agent))).toBe(false);
+  });
+
+  test("a declared suite labels file reaches the real hub after runJob finishes", async () => {
+    realHub = startHub({ port: 0, dbPath: join(tmp, "hub.db"), tokens: T });
+    const repo = join(tmp, "demo-repo");
+    const init = Bun.spawnSync([
+      "bun",
+      join(ROOT, "src", "cli.ts"),
+      "init",
+      repo,
+      "--name",
+      "demo",
+    ]);
+    expect(init.exitCode).toBe(0);
+    const suiteFile = join(repo, "weigh", "demo.suite.ts");
+    writeFileSync(
+      suiteFile,
+      `import { emptyUsage } from "./types.ts";
+      export default {
+        name: "demo", description: "Label upload tracer",
+        cases: async () => [1, 2].map(n => ({ id: "c" + n, input: n })),
+        variants: ["a", "b"].map(name => ({ name, description: "Deterministic",
+          run: async c => ({ output: c.input, usage: emptyUsage("fake") }) })),
+        checks: [
+          { id: "exact", description: "Has output", kind: "code", test: () => true },
+          { id: "judge_a", description: "First case passes", kind: "judge", test: c => c.input === 1 },
+        ],
+        baseline: "a", candidate: "b", labels: "weigh/labels/demo.jsonl",
+      };`,
+    );
+    mkdirSync(join(repo, "weigh", "labels"));
+    const labels: LabelRow[] = [
+      { case_id: "c1", variant: "b", human: "pass" },
+      { case_id: "c2", variant: "b", human: "fail" },
+    ];
+    writeFileSync(
+      join(repo, "weigh", "labels", "demo.jsonl"),
+      labels.map((row) => JSON.stringify(row)).join("\n"),
+    );
+    const hub = new HubClient(realHub.url, T.agent);
+    await hub.register({
+      agent_id: "imac",
+      version: "test",
+      projects: [
+        {
+          id: "demo",
+          suites: [
+            {
+              name: "demo",
+              path: "weigh/demo.suite.ts",
+              description: "Label upload tracer",
+              info: {},
+            },
+          ],
+        },
+      ],
+    });
+    const queued = await fetch(`${realHub.url}/api/runs`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${T.admin}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        project: "demo",
+        suite: "demo",
+        run_id: "labels",
+      }),
+    });
+    expect(queued.status).toBe(201);
+    const job = await hub.claim("imac", 1);
+    expect(job).toBeDefined();
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+    const status = await runJob({
+      hub,
+      job: job!,
+      agentId: "imac",
+      suiteFile,
+      checkout: repo,
+      runsDir: join(tmp, "runs"),
+      weighHome: ROOT,
+      env: { ...env, WEIGH_AGENT_TOKEN: T.agent },
+      heartbeatMs: 60_000,
+      log,
+    });
+    expect(status).toBe("finished");
+    const key = runKey("demo", "labels");
+    expect(realHub.store.labels(key)).toMatchObject(labels);
+    expect(realHub.store.judges(key)).toEqual([
+      expect.objectContaining({ check: "judge_a", joined: labels.length }),
+    ]);
+    expect(logs.some((entry) => entry.message.includes(T.agent))).toBe(false);
+  });
+});
 
 const SLOW_SUITE = `import type { Suite } from "./types.ts";
 import { emptyUsage } from "./types.ts";
