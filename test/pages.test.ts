@@ -567,7 +567,7 @@ describe("hub pages", () => {
     }
   });
 
-  test("landing normalizes offset timestamps and version punctuation", () => {
+  test("landing normalizes offset timestamps", () => {
     const store = landingStore();
     try {
       store.updateRun(run.key, { finished_at: "garbage" });
@@ -576,24 +576,6 @@ describe("hub pages", () => {
       expect(homePage(store)).toContain(
         'datetime="2026-10-19T22:30:00.000Z">2026-10-19 22:30 UTC</time>',
       );
-      const candidate = "new\u2013prompt 300+";
-      store.updateRun(run.key, {
-        meta: {
-          ...b.meta,
-          candidate,
-          variants: b.meta.variants.map((v) =>
-            v.name === b.meta.candidate ? { ...v, name: candidate } : v,
-          ),
-        },
-      });
-      for (const line of b.lines.filter((l) => l.variant === b.meta.candidate))
-        store.upsertTrace(run.key, { ...line, variant: candidate });
-      touch(store);
-      const html = homePage(store);
-      expect(html).not.toMatch(DASH);
-      expect(html.replace(/<[^>]*>/g, "")).not.toMatch(/\d\+/);
-      expect(html).toContain("new, prompt 300 or more");
-      expect(html).toContain('class="tag"');
     } finally {
       store.db.close();
     }

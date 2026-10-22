@@ -1,7 +1,7 @@
 import type { Built } from "../report/build.ts";
 import { esc } from "../report/html.ts";
 import type { Run } from "./store.ts";
-import { plainName, verdictSummary } from "./pages/run-sections.ts";
+import { verdictSummary } from "./pages/run-sections.ts";
 
 export type VerdictSummary = ReturnType<typeof verdictSummary>;
 
@@ -15,11 +15,9 @@ export function plainSummary(html: string): string {
     "&#39;": "'",
     "&apos;": "'",
   };
-  return plainName(
-    html
-      .replace(/<[^>]*>/g, "")
-      .replace(/&(?:amp|lt|gt|quot|apos|#39);/g, (entity) => entities[entity]!),
-  )
+  return html
+    .replace(/<[^>]*>/g, "")
+    .replace(/&(?:amp|lt|gt|quot|apos|#39);/g, (entity) => entities[entity]!)
     .replace(/\s+/g, " ")
     .trim();
 }

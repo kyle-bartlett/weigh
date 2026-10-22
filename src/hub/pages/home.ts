@@ -2,7 +2,7 @@ import { esc } from "../../report/html.ts";
 import { buildFrom, type Built, type JudgeRecord } from "../../report/build.ts";
 import type { Project, Run, Store, SuiteRow } from "../store.ts";
 import { page, statusTag, when } from "./layout.ts";
-import { verdictSummary, plainName } from "./run-sections.ts";
+import { verdictSummary } from "./run-sections.ts";
 import { plainSummary } from "../share.ts";
 import { timelineSchema } from "../../timeline.ts";
 
@@ -59,7 +59,7 @@ ${latest ? `<span>${finishedUtc ? `Last run <time class="mono" datetime="${esc(f
   return page({ title: "Weigh", body, generatedAt: opts.generatedAt });
 }
 
-const landingText = (text: string) => esc(plainName(text));
+const landingText = (text: string) => esc(text);
 
 /** Same no-traces rule as the run page. A malformed stored meta must not take down `/`. */
 function safeBuild(store: Store, run: Run, judges: JudgeRecord[]) {
