@@ -91,4 +91,148 @@ describe("run.js against a live hub", () => {
     expect(page.dispatched).toEqual(["weigh:run-finished"]);
     expect(page.pending()).toEqual([]);
   });
+
+  test("count-up: each counted cell climbs from zero to its value over 600 ms, keeping the real number as its label", async () => {
+    const page = await watchLiveRun();
+    page.clock = 1000;
+    await page.fire();
+    const cells = page.cells();
+    expect(cells.length).toBeGreaterThan(0);
+    const finals = cells.map((c) => c.textContent);
+    expect(cells.map((c) => c.attributes.get("aria-label"))).toEqual(finals);
+    const at = (fraction: number) =>
+      cells.map(
+        (c) =>
+          c.dataset.prefix +
+          (Number(c.dataset.count) * fraction).toLocaleString("en-US", {
+            minimumFractionDigits: Number(c.dataset.digits),
+            maximumFractionDigits: Number(c.dataset.digits),
+          }),
+      );
+    page.frame(1000);
+    expect(cells.map((c) => c.textContent)).toEqual(at(0));
+    page.frame(1300);
+    expect(cells.map((c) => c.textContent)).toEqual(at(0.5));
+    expect(page.frames()).toBe(1);
+    page.frame(1600);
+    expect(cells.map((c) => c.textContent)).toEqual(finals);
+    expect(page.frames()).toBe(0);
+  });
+
+  test("count-up: reduced motion completes the page without animating a number", async () => {
+    const page = await watchLiveRun(true);
+    await page.fire();
+    expect(page.dispatched).toEqual(["weigh:run-finished"]);
+    expect(page.frames()).toBe(0);
+    expect(page.cells()).toEqual([]);
+  });
+});
+
+describe("run.js against scripted fragments", () => {
+  const fragments = (status: string, finished: number, total: number) =>
+    Response.json({ verdict: `<p>${status}</p>`, status, finished, total });
+
+  /** A live page whose fragment fetches answer with whatever the test sets next. */
+  function scripted() {
+    const calls: string[] = [];
+    let answer: () => Promise<Response> = () => Promise.reject(new Error());
+    const page = openPage({
+      run: "demo/r1",
+      fetch: (url) => {
+        calls.push(url);
+        return answer();
+      },
+    });
+    return {
+      page,
+      calls,
+      reply: (fn: () => Response | Promise<Response>) => {
+        answer = async () => fn();
+      },
+    };
+  }
+
+  test("a lost run keeps the stream open and says so; once the agent heartbeats again the count resumes and the run still completes", async () => {
+    const { page, reply } = scripted();
+    page.es.emit("run_start", { total: 4, resumed: 0 });
+    page.es.emit("job_done", { finished: 1, total: 4, line: { case_id: "a" } });
+    expect(page.progress.textContent).toBe("Grading case 2 of 4");
+
+    page.es.emit("status", { status: "lost" });
+    expect(page.status.className).toBe("status lost");
+    expect(page.status.lastChild.textContent).toBe("lost");
+    expect(page.es.closed).toBe(false);
+    // The refresh the last job_done queued reads the hub's lost status: the page says so and keeps listening.
+    reply(() => fragments("lost", 1, 4));
+    await page.fire();
+    expect(page.progress.textContent).toBe(
+      "Lost contact with the agent after 1 of 4 cases.",
+    );
+    expect(page.sections.get("verdict")!.innerHTML).toBe("<p>lost</p>");
+    expect(page.es.closed).toBe(false);
+    expect(page.pending()).toEqual([]);
+    expect(page.dispatched).toEqual([]);
+
+    // The agent heartbeats again: the hub sends running, then the next case.
+    page.es.emit("status", { status: "running" });
+    page.es.emit("job_done", { finished: 2, total: 4, line: { case_id: "b" } });
+    expect(page.status.className).toBe("status running");
+    expect(page.progress.textContent).toBe("Grading case 3 of 4");
+
+    page.es.emit("job_done", { finished: 4, total: 4, line: { case_id: "d" } });
+    page.es.emit("status", { status: "finished" });
+    expect(page.es.closed).toBe(true);
+    reply(() => fragments("finished", 4, 4));
+    await page.fire();
+    expect(page.progress.textContent).toBe("Graded 4 of 4 cases.");
+    expect(page.dispatched).toEqual(["weigh:run-finished"]);
+  });
+
+  test("fragment retries back off from 3 s to a 30 s cap and give up after eight misses", async () => {
+    const { page, calls, reply } = scripted();
+    reply(() => Promise.reject(new TypeError("network down")));
+    page.es.emit("summary");
+    expect(page.pending()).toEqual([400]);
+    await page.fire();
+    reply(() => new Response("busy", { status: 503 }));
+    const delays: number[] = [];
+    while (page.pending().length) {
+      delays.push(...page.pending());
+      await page.fire();
+    }
+    expect(delays).toEqual([
+      3000, 6000, 12000, 24000, 30000, 30000, 30000, 30000,
+    ]);
+    expect(calls).toHaveLength(9);
+    // Giving up on fragments is not giving up on the run: the stream stays open for the next event.
+    expect(page.es.closed).toBe(false);
+  });
+
+  test("a good fetch resets the backoff, and a deleted run (404 or 410) stops polling and closes the stream", async () => {
+    for (const gone of [404, 410]) {
+      const { page, calls, reply } = scripted();
+      reply(() => new Response("busy", { status: 503 }));
+      page.es.emit("summary");
+      await page.fire();
+      await page.fire();
+      expect(page.pending()).toEqual([6000]);
+      reply(() => fragments("running", 1, 4));
+      await page.fire();
+      expect(page.pending()).toEqual([]);
+      expect(page.progress.textContent).toBe("Grading case 2 of 4");
+
+      reply(() => new Response("busy", { status: 503 }));
+      page.es.emit("summary");
+      await page.fire();
+      expect(page.pending()).toEqual([3000]);
+      reply(() => new Response("gone", { status: gone }));
+      await page.fire();
+      expect(page.pending()).toEqual([]);
+      expect(page.es.closed).toBe(true);
+      expect(calls).toHaveLength(5);
+      // Nothing restarts a run that is gone.
+      page.es.emit("summary");
+      expect(page.pending()).toEqual([]);
+    }
+  });
 });
