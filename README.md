@@ -222,6 +222,11 @@ weigh agent --config ~/.config/weigh/agent.json   # see deploy/launchd for the a
 weigh init ~/code/my-app --name main              # adds weigh/main.suite.ts and weigh/types.ts
 ```
 
+A run that `weigh import` creates belongs to the agent id given with `--agent` (default `import`). The hub
+accepts that run's judge records only from the same id or from the admin token, so import it again with the
+same `--agent`. A run imported before runs recorded an owner takes its judges only with the admin token, and
+the import error says so.
+
 Set optional `WEIGH_PUBLIC_ORIGIN=https://weigh.example` on the hub to pin share links
 and images to its public origin behind any proxy. It must be an absolute HTTP or HTTPS
 origin without a path, query, fragment or credentials (a trailing slash is allowed).

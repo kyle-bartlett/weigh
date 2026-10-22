@@ -195,10 +195,11 @@ export class Store {
     run_id: string;
     status: RunStatus;
     options?: Record<string, unknown>;
+    agent_id?: string;
   }): Run {
     this.db.run(
-      `INSERT INTO runs (key, project_id, suite, run_id, status, requested_at, options_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO runs (key, project_id, suite, run_id, status, requested_at, options_json, agent_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         r.key,
         r.project_id,
@@ -207,6 +208,7 @@ export class Store {
         r.status,
         now(),
         JSON.stringify(r.options ?? {}),
+        r.agent_id ?? null,
       ],
     );
     return this.getRun(r.key)!;

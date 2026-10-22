@@ -926,9 +926,16 @@ export function startHub(o: HubOptions) {
         project?: string;
         suite?: string;
         run_id?: string;
+        agent_id?: unknown;
       };
       if (!b.project || !b.suite || !b.run_id)
         throw new HttpError(400, "project, suite and run_id are required");
+      if (
+        b.agent_id !== undefined &&
+        (typeof b.agent_id !== "string" ||
+          !/^[a-z0-9][a-z0-9-]*$/.test(b.agent_id))
+      )
+        throw new HttpError(400, "agent_id must be a slug");
       if (
         !/^[a-z0-9][a-z0-9-]*$/.test(b.project) ||
         !/^[a-z0-9][a-z0-9-]*$/.test(b.suite) ||
@@ -940,15 +947,22 @@ export function startHub(o: HubOptions) {
       const existing = store.getRun(key);
       if (existing && existing.project_id !== b.project)
         throw new HttpError(409, "run belongs to another project");
-      if (!existing)
+      // The creator owns a new run, so later ownership-checked writes (judges) accept its agent id.
+      // An existing run keeps whatever owner it had.
+      const run =
+        existing ??
         store.createRun({
           key,
           project_id: b.project,
           suite: b.suite,
           run_id: b.run_id,
           status: "claimed",
+          agent_id: b.agent_id as string | undefined,
         });
-      return json({ key, created: !existing }, existing ? 200 : 201);
+      return json(
+        { key, created: !existing, agent_id: run.agent_id ?? null },
+        existing ? 200 : 201,
+      );
     }),
     route("POST", "/api/agent/runs/:suite/:run/events", async (c) => {
       if (!c.scopes.has("agent") && !c.scopes.has("admin"))
@@ -1014,11 +1028,16 @@ export function startHub(o: HubOptions) {
       store.putInputs(run.key, texts);
       return json({ stored: Object.keys(texts).length });
     }),
+    /** Admins or agents on their own run may replace its judge records. */
     route("PUT", "/api/agent/runs/:suite/:run/judges", async (c) => {
       if (!c.scopes.has("agent") && !c.scopes.has("admin"))
         throw new HttpError(401, "unauthorized");
       const run = agentRun(c);
-      const b = (await readJson(c)) as { records?: JudgeRecord[] };
+      const b = (await readJson(c)) as {
+        agent_id?: unknown;
+        records?: JudgeRecord[];
+      };
+      needRunOwner(c, run, b.agent_id);
       const records = (b.records ?? []).filter(
         (j) => j && typeof j.check === "string" && Array.isArray(j.splits),
       );

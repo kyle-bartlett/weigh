@@ -1,12 +1,19 @@
 import type { SQLQueryBindings } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   EVENT_BATCH,
   HubClient,
   HubHttpError,
+  IMPORT_AGENT_ID,
   importRunDir,
 } from "../src/agent/upload.ts";
 import { eventsFromTraces } from "../src/events.ts";
@@ -437,6 +444,15 @@ describe("agent labels and judge validation", () => {
     { method: "PUT", suffix: "/labels", body: { labels: rows } },
     { method: "POST", suffix: "/judges/validate", body: { check } },
   ];
+  // Every agent route that checks run ownership; the judges upload has no admin-route twin.
+  const ownerChecked = [
+    ...operations,
+    {
+      method: "PUT",
+      suffix: "/judges",
+      body: { records: readJudges(example) },
+    },
+  ];
   const call = (
     method: string,
     path: string,
@@ -570,7 +586,7 @@ describe("agent labels and judge validation", () => {
     ).toEqual(clientRecord);
   });
 
-  test("another agent and an unowned run reject both writes without side effects", async () => {
+  test("another agent and an unowned run reject every owner-checked write without side effects", async () => {
     await client.createRun({ project: "demo", suite, run_id: "unowned" });
     expect(snapshot("unowned").run?.agent_id).toBeFalsy();
     for (const [runId, agentId] of [
@@ -578,7 +594,7 @@ describe("agent labels and judge validation", () => {
       ["unowned", "imac"],
     ] as const) {
       const before = snapshot(runId);
-      for (const op of operations) {
+      for (const op of ownerChecked) {
         const response = await call(op.method, path(runId, op.suffix), {
           ...op.body,
           agent_id: agentId,
@@ -596,7 +612,7 @@ describe("agent labels and judge validation", () => {
     const before = snapshot("owned");
     for (const token of [T.read, ""]) {
       for (const runId of ["owned", "missing"]) {
-        for (const op of operations) {
+        for (const op of ownerChecked) {
           const response = await call(
             op.method,
             path(runId, op.suffix),
@@ -624,7 +640,7 @@ describe("agent labels and judge validation", () => {
       123,
       ["imac"],
     ]) {
-      for (const op of operations) {
+      for (const op of ownerChecked) {
         const response = await call(op.method, path("owned", op.suffix), {
           ...op.body,
           agent_id: agentId,
@@ -641,7 +657,7 @@ describe("agent labels and judge validation", () => {
   test("authorized callers get 404 for a missing run without creating one", async () => {
     const before = snapshot("owned");
     for (const token of [T.agent, T.admin]) {
-      for (const op of operations) {
+      for (const op of ownerChecked) {
         const response = await call(
           op.method,
           path("missing", op.suffix),
@@ -659,9 +675,11 @@ describe("agent labels and judge validation", () => {
   });
 
   test("admins bypass agent identity and ownership on the new routes", async () => {
-    const { run_id: runId } = await importRunDir(client, example, {
-      project: "demo",
-    });
+    // An ownerless run, as every import made before runs recorded an owner; only the admin token may import it.
+    const admin = new HubClient(hub.url, T.admin);
+    const runId = readMeta(example).run_id;
+    await admin.createRun({ project: "demo", suite, run_id: runId });
+    await importRunDir(admin, example, { project: "demo" });
     expect(snapshot(runId).run?.agent_id).toBeFalsy();
     for (const [i, agentId] of [undefined, "Bad ID", "other"].entries()) {
       const put = await call(
@@ -693,6 +711,111 @@ describe("agent labels and judge validation", () => {
     }
   });
 
+  test("the judges upload accepts the claimant and an admin without an agent id", async () => {
+    const runId = "judges-owned";
+    await claimedRun(runId);
+    const records = readJudges(example);
+    const checks = records.map((j) => j.check).sort();
+    for (const [token, body] of [
+      [T.agent, { agent_id: "imac", records }],
+      [T.admin, { records }],
+    ] as const) {
+      hub.store.db.run("DELETE FROM judges WHERE run_key = ?", [
+        runKey(suite, runId),
+      ]);
+      const response = await call("PUT", path(runId, "/judges"), body, token);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ stored: records.length });
+      expect(
+        snapshot(runId)
+          .judges.map((j) => j.check)
+          .sort(),
+      ).toEqual(checks);
+    }
+  });
+
+  test("import owns the runs it creates and explains a refused judges upload", async () => {
+    // Run keys are global, so each import gets its own copy of the example under a fresh run id.
+    const exampleAs = (runId: string): string => {
+      const out = join(dir, `import-${runId}`);
+      cpSync(example, out, { recursive: true });
+      for (const file of ["run.json", "traces.jsonl"]) {
+        const p = join(out, file);
+        writeFileSync(
+          p,
+          readFileSync(p, "utf8").replaceAll("2026-10-19-prompts", runId),
+        );
+      }
+      return out;
+    };
+    const fresh = await importRunDir(client, exampleAs("import-fresh"), {
+      project: "demo",
+    });
+    expect(fresh.judges).toBe(2);
+    expect(snapshot("import-fresh").run?.agent_id).toBe(IMPORT_AGENT_ID);
+    expect(snapshot("import-fresh").judges).toHaveLength(2);
+    // A second import under the same id is the same owner, so it goes through again.
+    expect(
+      (
+        await importRunDir(client, exampleAs("import-again"), {
+          project: "demo",
+        })
+      ).judges,
+    ).toBe(2);
+    expect(
+      (
+        await importRunDir(client, join(dir, "import-import-again"), {
+          project: "demo",
+        })
+      ).judges,
+    ).toBe(2);
+
+    for (const [runId, owner, hint] of [
+      [
+        "import-ownerless",
+        undefined,
+        "re-run weigh import with the admin token",
+      ],
+      [
+        "import-claimed",
+        "other",
+        "re-run weigh import with --agent other or with the admin token",
+      ],
+    ] as const) {
+      await client.createRun({
+        project: "demo",
+        suite,
+        run_id: runId,
+        agent_id: owner,
+      });
+      expect(snapshot(runId).run?.status).toBe("claimed");
+      const error: unknown = await importRunDir(client, exampleAs(runId), {
+        project: "demo",
+      }).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(HubHttpError);
+      if (!(error instanceof HubHttpError))
+        throw new Error("expected HubHttpError");
+      expect(error.status).toBe(403);
+      expect(error.message).toContain(`judges for ${suite}/${runId} refused`);
+      expect(error.message).toContain(hint);
+      for (const token of Object.values(T))
+        expect(error.message).not.toContain(token);
+      // The events already carried the run to its end, so a refused upload leaves nothing claimed.
+      expect(snapshot(runId).run?.status).toBe("finished");
+      expect(snapshot(runId).judges).toEqual([]);
+      expect(snapshot(runId).run?.agent_id ?? undefined).toBe(owner);
+    }
+    const bad = await call("POST", "/api/agent/runs", {
+      project: "demo",
+      suite,
+      run_id: "import-bad-owner",
+      agent_id: "Bad ID",
+    });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ error: "agent_id must be a slug" });
+    expect(snapshot("import-bad-owner").run).toBeUndefined();
+  });
+
   test("unknown and missing checks return identical 400 errors on admin and agent routes", async () => {
     const before = snapshot("owned");
     for (const agent of [true, false]) {
@@ -714,7 +837,7 @@ describe("agent labels and judge validation", () => {
 
   test("both conflict paths preserve records and reach clients as HubHttpError 409", async () => {
     await claimedRun("conflict");
-    await client.putJudges(suite, "conflict", readJudges(example));
+    await client.putJudges(suite, "conflict", "imac", readJudges(example));
     for (const absent of [false, true]) {
       if (absent) {
         expect(
@@ -1008,7 +1131,7 @@ describe("hub judge records", () => {
               authorization: `Bearer ${T.agent}`,
               "content-type": "application/json",
             },
-            body: JSON.stringify({ records }),
+            body: JSON.stringify({ agent_id: IMPORT_AGENT_ID, records }),
           },
         );
       const zero = { ...original, check: "zero_joined", joined: 0 };

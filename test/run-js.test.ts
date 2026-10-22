@@ -8,7 +8,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HubClient, importRunDir } from "../src/agent/upload.ts";
+import {
+  HubClient,
+  IMPORT_AGENT_ID,
+  importRunDir,
+} from "../src/agent/upload.ts";
 import { startHub } from "../src/hub/server.ts";
 import { openPage } from "./run-page.ts";
 
@@ -65,10 +69,12 @@ describe("run.js against a live hub", () => {
           authorization: `Bearer ${T.read}`,
         },
       });
+    // Created under the importer's id, as the import below would, so its judges upload is accepted.
     await client.createRun({
       project: "live",
       suite: "exchange-triage",
       run_id: runId,
+      agent_id: IMPORT_AGENT_ID,
     });
     const page = openPage({
       run: `exchange-triage/${runId}`,

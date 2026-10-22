@@ -75,13 +75,14 @@ const retry = async <T>(
   log: Log,
   what: string,
   signal?: { stop: boolean },
+  giveUp?: (e: unknown) => boolean,
 ): Promise<T> => {
   let delay = 1000;
   for (;;) {
     try {
       return await fn();
     } catch (e) {
-      if (signal?.stop) throw e;
+      if (signal?.stop || giveUp?.(e)) throw e;
       log(
         "warn",
         `${what}: ${String(e instanceof Error ? e.message : e).slice(0, 200)}; retry in ${delay / 1000}s`,
@@ -95,13 +96,14 @@ const retry = async <T>(
 /**
  * Upload everything in a run directory the hub has not acknowledged yet: runner events (with the
  * attempt's seq offset), outputs for finished pairs, inputs, judges. Used live and by the recovery sweep.
+ * `agentId` is this agent's id; the hub refuses the judges upload from anyone but the run's claimant.
  */
 export async function syncRunDir(
   hub: HubClient,
   job: { suite: string; run_id: string; src_seq_base: number },
   runDir: string,
   log: Log,
-  opts: { final?: RunStatus } = {},
+  opts: { agentId: string; final?: RunStatus },
 ): Promise<Cursor> {
   const cur = readCursor(runDir);
   const seen = cur.src_seq - job.src_seq_base;
@@ -167,18 +169,31 @@ export async function syncRunDir(
   if (opts.final) {
     const judges = readJudges(runDir);
     if (judges.length && !cur.judges_acked) {
-      await retry(
-        () =>
-          hub.putJudges(
-            job.suite,
-            job.run_id,
-            judges.map((j) => ({ ...j, labels: scrubText(j.labels) })),
-          ),
-        log,
-        "judges",
-      );
-      cur.judges_acked = true;
-      writeCursor(runDir, cur);
+      try {
+        await retry(
+          () =>
+            hub.putJudges(
+              job.suite,
+              job.run_id,
+              opts.agentId,
+              judges.map((j) => ({ ...j, labels: scrubText(j.labels) })),
+            ),
+          log,
+          "judges",
+          undefined,
+          refused,
+        );
+        cur.judges_acked = true;
+        writeCursor(runDir, cur);
+      } catch (e) {
+        // A refusal (another agent's run, a malformed body) never succeeds on retry; waiting on it would
+        // block every later claim. The run still finishes and judges.json stays in the run dir.
+        if (!refused(e)) throw e;
+        log(
+          "warn",
+          `judges: ${String(e instanceof Error ? e.message : e).slice(0, 200)}; not uploaded, finishing the run without them`,
+        );
+      }
     }
     await retry(
       () => hub.finish(job.suite, job.run_id, opts.final!),
@@ -190,6 +205,14 @@ export async function syncRunDir(
   }
   return cur;
 }
+
+/** A client error other than a timeout or rate limit: the same request will be refused again. */
+const refused = (e: unknown): boolean =>
+  e instanceof HubHttpError &&
+  e.status >= 400 &&
+  e.status < 500 &&
+  e.status !== 408 &&
+  e.status !== 429;
 
 /** A retried run restarts the runner's seq at 1; the hub keeps every attempt in one sequence via the offset. */
 function prepare(e: RunEvent, base: number): RunEvent {
@@ -424,7 +447,7 @@ export async function runJob(o: RunnerOptions): Promise<RunStatus> {
       );
     }
   }, o.heartbeatMs);
-  const sync = () => syncRunDir(hub, job, runDir, log);
+  const sync = () => syncRunDir(hub, job, runDir, log, { agentId: o.agentId });
   const tail = setInterval(() => void sync().catch(() => {}), 1000);
   const code = await child.exited;
   stop = true;
@@ -441,7 +464,10 @@ export async function runJob(o: RunnerOptions): Promise<RunStatus> {
       "error",
       `runner exited ${code}: ${tailOf(join(runDir, "runner.log"))}`,
     );
-  await syncRunDir(hub, job, runDir, log, { final: status });
+  await syncRunDir(hub, job, runDir, log, {
+    agentId: o.agentId,
+    final: status,
+  });
   if (status === "finished") {
     try {
       await uploadLabels({

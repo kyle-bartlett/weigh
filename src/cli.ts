@@ -45,8 +45,8 @@ const usage = `usage:
   weigh suite-info <suite.ts>             print the suite's name, variants, checks and gate as JSON (no cases built)
   weigh rescore <suite.ts> [run-id]       re-run the checks over a run's cached outputs (no model calls)
   weigh hub [--port N] [--db path]         serve the dashboard (tokens from WEIGH_ADMIN_TOKEN, WEIGH_AGENT_TOKEN, WEIGH_READ_TOKEN)
-  weigh import <run-dir> --hub <url> --project <id> [--token-file path | --token t]
-                                          push a finished run directory to a hub
+  weigh import <run-dir> --hub <url> --project <id> [--agent id] [--token-file path | --token t]
+                                          push a finished run directory to a hub (a new run is owned by --agent, default "import")
   weigh agent [--config ~/.config/weigh/agent.json] [--once]
                                           run suites for a hub on this machine
   weigh init <repo-dir> [--name <suite>]  add weigh/<suite>.suite.ts and weigh/types.ts to a project`;
@@ -350,10 +350,14 @@ export async function main(argv = process.argv.slice(2)) {
       (tokenFile ? readFileSync(tokenFile, "utf8").trim() : undefined) ??
       process.env.WEIGH_AGENT_TOKEN ??
       process.env.WEIGH_ADMIN_TOKEN;
+    const agentId = flag(rest, "--agent");
     if (!dir || !hub || !project || !token) throw new Error(usage);
+    if (agentId !== undefined && !/^[a-z0-9][a-z0-9-]*$/.test(agentId))
+      throw new Error("--agent must be a lowercase slug");
     const { HubClient, importRunDir } = await import("./agent/upload.ts");
     const r = await importRunDir(new HubClient(hub, token), resolve(dir), {
       project,
+      agentId,
       log: (s) => console.error(s),
     });
     console.log(`${hub.replace(/\/$/, "")}/r/${r.suite}/${r.run_id}`);

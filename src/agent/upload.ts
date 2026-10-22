@@ -94,10 +94,17 @@ export class HubClient {
       body,
     ) as Promise<{ cancel: boolean }>;
   }
-  createRun(r: { project: string; suite: string; run_id: string }) {
+  /** A run created here is owned by `agent_id` when one is given; an existing run keeps its owner. */
+  createRun(r: {
+    project: string;
+    suite: string;
+    run_id: string;
+    agent_id?: string;
+  }) {
     return this.json("POST", "/api/agent/runs", r) as Promise<{
       key: string;
       created: boolean;
+      agent_id?: string | null;
     }>;
   }
   postEvents(
@@ -142,11 +149,11 @@ export class HubClient {
       texts,
     );
   }
-  putJudges(suite: string, runId: string, records: unknown[]) {
+  putJudges(suite: string, runId: string, agentId: string, records: unknown[]) {
     return this.json(
       "PUT",
       `/api/agent/runs/${enc(suite)}/${enc(runId)}/judges`,
-      { records },
+      { agent_id: agentId, records },
     );
   }
   putLabels(
@@ -199,17 +206,22 @@ export interface Job {
 /** Scrub a trace line and normalize nothing else; the hub scrubs again on ingest. */
 export const outboundLine = (l: TraceLine): TraceLine => scrub(l);
 
+/** The agent id `weigh import` creates runs under when no `--agent` is given. */
+export const IMPORT_AGENT_ID = "import";
+
 /**
  * Push a finished run directory to the hub as if the agent had run it: events (from events.jsonl or
  * synthesized from the traces), inputs, outputs, judges, then finish. Idempotent: the hub ignores
- * events it already has and overwrites outputs with the same content.
+ * events it already has and overwrites outputs with the same content. A run this creates is owned by
+ * `agentId`, which the judges upload must match unless the token is the admin token.
  */
 export async function importRunDir(
   client: HubClient,
   dir: string,
-  opts: { project: string; log?: (s: string) => void },
+  opts: { project: string; agentId?: string; log?: (s: string) => void },
 ) {
   const log = opts.log ?? (() => {});
+  const agentId = opts.agentId ?? IMPORT_AGENT_ID;
   const meta = readMeta(dir);
   const lines = readTraces(dir);
   const eventsPath = join(dir, "events.jsonl");
@@ -228,10 +240,11 @@ export async function importRunDir(
       ? { ...e, meta: { ...e.meta, command: shortCommand(e.meta.command) } }
       : e,
   );
-  const { created } = await client.createRun({
+  const { created, agent_id: owner } = await client.createRun({
     project: opts.project,
     suite: meta.suite,
     run_id: meta.run_id,
+    agent_id: agentId,
   });
   log(
     `${created ? "created" : "updating"} ${meta.suite}/${meta.run_id}: ${events.length} events, ${lines.length} trace lines`,
@@ -268,12 +281,25 @@ export async function importRunDir(
     outputs++;
   }
   const judges = readJudges(dir);
-  if (judges.length)
-    await client.putJudges(
-      meta.suite,
-      meta.run_id,
-      judges.map((j) => ({ ...j, labels: scrubText(j.labels) })),
-    );
+  if (judges.length) {
+    try {
+      await client.putJudges(
+        meta.suite,
+        meta.run_id,
+        agentId,
+        judges.map((j) => ({ ...j, labels: scrubText(j.labels) })),
+      );
+    } catch (e) {
+      if (!(e instanceof HubHttpError) || e.status !== 403) throw e;
+      const run = `${meta.suite}/${meta.run_id}`;
+      throw new HubHttpError(
+        403,
+        owner
+          ? `judges for ${run} refused: the run belongs to agent "${owner}"; re-run weigh import with --agent ${owner} or with the admin token`
+          : `judges for ${run} refused: the run has no owning agent (it was imported before runs recorded one); re-run weigh import with the admin token`,
+      );
+    }
+  }
   const status: RunStatus = meta.cancelled_at ? "cancelled" : "finished";
   await client.finish(meta.suite, meta.run_id, status);
   log(

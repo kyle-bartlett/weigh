@@ -27,6 +27,7 @@ import { HubClient } from "../src/agent/upload.ts";
 import type { Log } from "../src/agent/checkout.ts";
 import { startHub } from "../src/hub/server.ts";
 import { runKey } from "../src/hub/store.ts";
+import { readJudges } from "../src/report/build.ts";
 import type { LabelRow } from "../src/judge.ts";
 
 // Subprocess runs use the same budget as `bun test --timeout 60000`.
@@ -855,5 +856,74 @@ describe("agent", () => {
     const ids = [...sse.matchAll(/^id: (\d+)/gm)].map((m) => Number(m[1]));
     expect(ids).toEqual(ids.map((_, i) => i + 1));
     expect([...sse.matchAll(/^event: job_done/gm)]).toHaveLength(12);
+  });
+
+  test("the recovery sweep uploads judges under the agent's id and finishes another agent's run without them", async () => {
+    const records = readJudges(
+      join(ROOT, "runs", "examples", "exchange-triage-2026-10-19"),
+    );
+    const client = new HubClient(hub.url, T.agent);
+    const sweptDir = (runId: string): string => {
+      const runDir = join(tmp, "runs", "demo", runId);
+      mkdirSync(runDir, { recursive: true });
+      writeFileSync(
+        join(runDir, ".hub-cursor"),
+        JSON.stringify({ src_seq: 0, outputs_acked: [] }),
+      );
+      writeFileSync(
+        join(runDir, "run.json"),
+        JSON.stringify({ finished_at: "2026-10-22T00:00:00Z" }),
+      );
+      writeFileSync(
+        join(runDir, "judges.json"),
+        JSON.stringify(Object.fromEntries(records.map((j) => [j.check, j]))),
+      );
+      return runDir;
+    };
+    for (const [runId, owner] of [
+      ["swept-own", "test-agent"],
+      ["swept-other", "other-agent"],
+    ] as const) {
+      await client.createRun({
+        project: "demo",
+        suite: "demo",
+        run_id: runId,
+        agent_id: owner,
+      });
+      sweptDir(runId);
+    }
+    const lines: string[] = [];
+    await startAgent(config, { once: true, log: (line) => lines.push(line) });
+    const own = runKey("demo", "swept-own");
+    expect(
+      hub.store
+        .judges(own)
+        .map((j) => j.check)
+        .sort(),
+    ).toEqual(records.map((j) => j.check).sort());
+    expect((await runJson("demo", "swept-own")).status).toBe("finished");
+    expect(
+      readFileSync(
+        join(tmp, "runs", "demo", "swept-own", ".hub-cursor"),
+        "utf8",
+      ),
+    ).toContain('"done":"finished"');
+    // The hub refuses the judges of a run another agent owns; the sweep warns, finishes it and moves on.
+    expect(hub.store.judges(runKey("demo", "swept-other"))).toEqual([]);
+    expect((await runJson("demo", "swept-other")).status).toBe("finished");
+    expect(
+      readFileSync(
+        join(tmp, "runs", "demo", "swept-other", ".hub-cursor"),
+        "utf8",
+      ),
+    ).toContain('"done":"finished"');
+    expect(
+      lines.some((line) =>
+        /\[warn\] judges: .*403.*not uploaded, finishing the run without them/.test(
+          line,
+        ),
+      ),
+    ).toBe(true);
+    expect(lines.some((line) => line.includes(T.agent))).toBe(false);
   });
 });

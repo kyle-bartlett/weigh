@@ -160,6 +160,7 @@ export async function startAgent(
             dir,
             log,
             {
+              agentId: c.agent_id,
               final: meta.cancelled_at
                 ? "cancelled"
                 : meta.finished_at
