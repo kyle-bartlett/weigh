@@ -206,13 +206,16 @@ export async function syncRunDir(
   return cur;
 }
 
-/** A client error other than a timeout or rate limit: the same request will be refused again. */
-const refused = (e: unknown): boolean =>
+/**
+ * A client error the same request will hit again. Timeouts and rate limits pass, and so do 401 (a bad
+ * or rotating hub token heals once fixed; giving up would drop the judges for good) and 404 (finish
+ * blocks on a missing run anyway, so the sweep retries the judges after a restart).
+ */
+export const refused = (e: unknown): boolean =>
   e instanceof HubHttpError &&
   e.status >= 400 &&
   e.status < 500 &&
-  e.status !== 408 &&
-  e.status !== 429;
+  ![401, 404, 408, 429].includes(e.status);
 
 /** A retried run restarts the runner's seq at 1; the hub keeps every attempt in one sequence via the offset. */
 function prepare(e: RunEvent, base: number): RunEvent {

@@ -22,8 +22,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startAgent } from "../src/agent/main.ts";
-import { runJob, uploadLabels } from "../src/agent/runner.ts";
-import { HubClient } from "../src/agent/upload.ts";
+import { refused, runJob, uploadLabels } from "../src/agent/runner.ts";
+import { HubClient, HubHttpError } from "../src/agent/upload.ts";
 import type { Log } from "../src/agent/checkout.ts";
 import { startHub } from "../src/hub/server.ts";
 import { runKey } from "../src/hub/store.ts";
@@ -925,5 +925,14 @@ describe("agent", () => {
       ),
     ).toBe(true);
     expect(lines.some((line) => line.includes(T.agent))).toBe(false);
+  });
+});
+
+describe("judges refusal", () => {
+  test("gives up only on errors a retry cannot fix", () => {
+    const at = (status: number) => refused(new HubHttpError(status, "x"));
+    expect([400, 403, 409, 413, 422].every(at)).toBe(true);
+    expect([401, 404, 408, 429, 500, 503].some(at)).toBe(false);
+    expect(refused(new Error("fetch failed"))).toBe(false);
   });
 });
