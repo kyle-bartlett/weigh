@@ -1,3 +1,4 @@
+import { SPLITS } from "../../judge.ts";
 import { esc } from "../../report/html.ts";
 import type { TraceLine } from "../../types.ts";
 import type { Project, Run } from "../store.ts";
@@ -54,7 +55,7 @@ export function labelsPage(
       ),
     })),
     labels: labels.filter((l) => l.variant === candidate),
-    splits: ["train", "dev", "test"],
+    splits: [...SPLITS],
   };
   const done = order.filter((id) =>
     data.labels.some((l) => l.case_id === id),

@@ -204,7 +204,7 @@ export function startHub(o: HubOptions) {
         variant: string;
         human: "pass" | "fail";
         note?: string;
-        split?: string;
+        split?: unknown;
       } =>
         !!r &&
         typeof r === "object" &&
@@ -214,10 +214,13 @@ export function startHub(o: HubOptions) {
           (r as { human?: unknown }).human === "fail"),
     );
     // An unknown split would show up as its own bucket, and "all" would count rows twice.
-    for (const r of rows)
-      if (r.split !== undefined && !SPLITS.includes(r.split))
+    const normalized = rows.map(({ split, ...row }) => {
+      if (split == null) return row;
+      if (typeof split !== "string" || !SPLITS.includes(split))
         throw new HttpError(400, "split must be train, dev or test");
-    return scrub(rows);
+      return { ...row, split };
+    });
+    return scrub(normalized);
   };
   /** The review page's write: a person's label replaces the stored one. */
   const storeLabels = (

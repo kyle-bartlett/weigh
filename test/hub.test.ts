@@ -706,6 +706,60 @@ describe("agent labels and judge validation", () => {
     }
   });
 
+  test("admin labels round trip with null splits while preserving existing splits", async () => {
+    const runId = "null-splits";
+    await claimedRun(runId);
+    const person = {
+      case_id: "GOLD-01",
+      variant: "v3",
+      human: "pass",
+      note: "admin reviewed",
+      split: "dev",
+    };
+    const put = await call(
+      "PUT",
+      path(runId, "/labels", false),
+      { labels: [person] },
+      T.admin,
+    );
+    expect(put.status).toBe(200);
+    const get = await call(
+      "GET",
+      path(runId, "/labels", false),
+      undefined,
+      T.admin,
+    );
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as (typeof person)[];
+    for (const labels of [body.map((row) => ({ ...row, split: null })), body]) {
+      const response = await call(
+        "PUT",
+        path(runId, "/labels", false),
+        { labels },
+        T.admin,
+      );
+      expect(response.status).toBe(200);
+      expect(snapshot(runId).labels).toEqual([expect.objectContaining(person)]);
+    }
+    const fresh = {
+      case_id: "GOLD-02",
+      variant: "v3",
+      human: "fail",
+      note: "new label",
+    };
+    const added = await call(
+      "PUT",
+      path(runId, "/labels", false),
+      { labels: [{ ...fresh, split: null }] },
+      T.admin,
+    );
+    expect(added.status).toBe(200);
+    expect(snapshot(runId).labels).toEqual([
+      expect.objectContaining(person),
+      expect.objectContaining({ ...fresh, split: undefined }),
+    ]);
+  });
+
   test("labels with an unknown split are refused on both routes", async () => {
     await claimedRun("splits");
     for (const split of ["all", "bogus"]) {
