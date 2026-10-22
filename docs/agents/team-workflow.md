@@ -18,6 +18,7 @@ _Pack version: 1.7.2 · Last confirmed: 2026-10-21 (Kyle answered decider, home,
 ```bash
 bunx tsc --noEmit
 bun test
+bun test --randomize --seed=3
 ```
 
 Formatting is enforced by the procoder commit gate (it rejects unformatted files and attribution trailers); run the formatter in its own call before committing. No lint or build step exists as of 2026-10-21; revisit at the next re-run.

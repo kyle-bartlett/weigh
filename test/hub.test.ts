@@ -1,3 +1,4 @@
+import type { SQLQueryBindings } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,14 +26,22 @@ const T = { admin: "admin-token", agent: "agent-token", read: "read-token" };
 
 describe("hub", () => {
   let hub: ReturnType<typeof startHub>;
+  let dir: string;
   beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "weigh-hub-"));
     hub = startHub({
       port: 0,
-      dbPath: join(mkdtempSync(join(tmpdir(), "weigh-hub-")), "hub.db"),
+      dbPath: join(dir, "hub.db"),
       tokens: T,
     });
   });
-  afterAll(() => hub.stop());
+  afterAll(() => {
+    try {
+      hub?.stop();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   const get = (path: string, token?: string) =>
     fetch(hub.url + path, {
@@ -199,6 +208,41 @@ describe("hub", () => {
     expect(after.last_seq).toBe(ids.at(-1)!);
   });
 
+  test("agent endpoints refuse the read token and public pages reject unknown routes", async () => {
+    const res = await fetch(hub.url + "/api/agent/runs", {
+      method: "POST",
+      headers: { authorization: `Bearer ${T.read}` },
+      body: JSON.stringify({ project: "x", suite: "y", run_id: "z" }),
+    });
+    expect(res.status).toBe(401);
+    expect((await get("/nope")).status).toBe(404);
+    expect((await get("/mcp")).status).toBe(405);
+    expect((await get("/healthz")).status).toBe(200);
+  });
+});
+
+describe("hub labels", () => {
+  let hub: ReturnType<typeof startHub>;
+  let dir: string;
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), "weigh-hub-labels-"));
+    hub = startHub({ port: 0, dbPath: join(dir, "hub.db"), tokens: T });
+    await importRunDir(new HubClient(hub.url, T.agent), example, {
+      project: "exchange-triage",
+    });
+  });
+  afterAll(() => {
+    try {
+      hub?.stop();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  const get = (path: string, token?: string) =>
+    fetch(hub.url + path, {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+
   test("labels upsert on the hub and judge validation reproduces the committed numbers", async () => {
     const rows = readFileSync(
       join(import.meta.dir, "..", "suites", "exchange-triage.labels.jsonl"),
@@ -262,18 +306,6 @@ describe("hub", () => {
     ).text();
     expect(page).toContain("labels-data");
     expect(page).toContain("/web/labels.js");
-  });
-
-  test("agent endpoints refuse the read token and public pages reject unknown routes", async () => {
-    const res = await fetch(hub.url + "/api/agent/runs", {
-      method: "POST",
-      headers: { authorization: `Bearer ${T.read}` },
-      body: JSON.stringify({ project: "x", suite: "y", run_id: "z" }),
-    });
-    expect(res.status).toBe(401);
-    expect((await get("/nope")).status).toBe(404);
-    expect((await get("/mcp")).status).toBe(405);
-    expect((await get("/healthz")).status).toBe(200);
   });
 });
 
@@ -796,18 +828,26 @@ describe("agent labels and judge validation", () => {
 
 describe("hub judge records", () => {
   let hub: ReturnType<typeof startHub>;
+  let dir: string;
   const runPath = "/api/runs/exchange-triage/2026-10-19-prompts";
   beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), "weigh-hub-"));
     hub = startHub({
       port: 0,
-      dbPath: join(mkdtempSync(join(tmpdir(), "weigh-hub-")), "hub.db"),
+      dbPath: join(dir, "hub.db"),
       tokens: T,
     });
     await importRunDir(new HubClient(hub.url, T.agent), example, {
       project: "exchange-triage",
     });
   });
-  afterAll(() => hub.stop());
+  afterAll(() => {
+    try {
+      hub?.stop();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   const call = (method: string, path: string, body?: unknown) =>
     fetch(hub.url + runPath + path, {
@@ -818,6 +858,32 @@ describe("hub judge records", () => {
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+  const snapshot = (): (() => void) => {
+    const key = runKey("exchange-triage", "2026-10-19-prompts");
+    const db = hub.store.db;
+    const tables = (["labels", "judges"] as const).map((table) => ({
+      table,
+      rows: db
+        .query<
+          Record<string, SQLQueryBindings>,
+          [string]
+        >(`SELECT * FROM ${table} WHERE run_key = ?`)
+        .all(key),
+    }));
+    return db.transaction(() => {
+      for (const { table, rows } of tables) {
+        db.run(`DELETE FROM ${table} WHERE run_key = ?`, [key]);
+        for (const row of rows) {
+          const columns = Object.keys(row);
+          db.run(
+            `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+            Object.values(row),
+          );
+        }
+      }
+    });
+  };
+
   const judges = async () =>
     (
       (await (await call("GET", "/summary")).json()) as {
@@ -826,108 +892,128 @@ describe("hub judge records", () => {
     ).judges;
 
   test("validate refuses a check no label joined and keeps the stored record", async () => {
-    const before = await judges();
-    expect(before.find((j) => j.check === "attribution_jev")?.joined).toBe(54);
-    // A label on a variant with no trace has no verdict to join, like an all-unanswered judge.
-    const put = await call("PUT", "/labels", {
-      labels: [{ case_id: "GOLD-01", variant: "absent", human: "pass" }],
-    });
-    expect(put.status).toBe(200);
-    const v = await call("POST", "/judges/validate", {
-      check: "attribution_jev",
-    });
-    expect(v.status).toBe(409);
-    expect(await v.text()).toContain("attribution_jev");
-    expect(await judges()).toEqual(before);
+    const restore = snapshot();
+    try {
+      const before = await judges();
+      expect(before.find((j) => j.check === "attribution_jev")?.joined).toBe(
+        54,
+      );
+      // A label on a variant with no trace has no verdict to join, like an all-unanswered judge.
+      const put = await call("PUT", "/labels", {
+        labels: [{ case_id: "GOLD-01", variant: "absent", human: "pass" }],
+      });
+      expect(put.status).toBe(200);
+      const v = await call("POST", "/judges/validate", {
+        check: "attribution_jev",
+      });
+      expect(v.status).toBe(409);
+      expect(await v.text()).toContain("attribution_jev");
+      expect(await judges()).toEqual(before);
+    } finally {
+      restore();
+    }
   });
 
   test("DELETE removes one judge record, then reports nothing left to remove", async () => {
-    const del = await call("DELETE", "/judges/attribution_jev");
-    expect(del.status).toBe(200);
-    expect(await del.json()).toEqual({ ok: true, removed: 1 });
-    expect((await judges()).map((j) => j.check)).toEqual([
-      "attribution_claude",
-    ]);
-    const before = (await (await call("GET", "")).json()) as {
-      last_seq: number;
-    };
-    const again = await call("DELETE", "/judges/attribution_jev");
-    expect(await again.json()).toEqual({ ok: true, removed: 0 });
-    const after = (await (await call("GET", "")).json()) as {
-      last_seq: number;
-    };
-    expect(after.last_seq).toBe(before.last_seq);
-    const asRead = await fetch(
-      hub.url + runPath + "/judges/attribution_claude",
-      {
-        method: "DELETE",
-        headers: { authorization: `Bearer ${T.read}` },
-      },
-    );
-    expect(asRead.status).toBe(401);
-    expect((await judges()).map((j) => j.check)).toEqual([
-      "attribution_claude",
-    ]);
+    const restore = snapshot();
+    try {
+      const del = await call("DELETE", "/judges/attribution_jev");
+      expect(del.status).toBe(200);
+      expect(await del.json()).toEqual({ ok: true, removed: 1 });
+      expect((await judges()).map((j) => j.check)).toEqual([
+        "attribution_claude",
+      ]);
+      const before = (await (await call("GET", "")).json()) as {
+        last_seq: number;
+      };
+      const again = await call("DELETE", "/judges/attribution_jev");
+      expect(await again.json()).toEqual({ ok: true, removed: 0 });
+      const after = (await (await call("GET", "")).json()) as {
+        last_seq: number;
+      };
+      expect(after.last_seq).toBe(before.last_seq);
+      const asRead = await fetch(
+        hub.url + runPath + "/judges/attribution_claude",
+        {
+          method: "DELETE",
+          headers: { authorization: `Bearer ${T.read}` },
+        },
+      );
+      expect(asRead.status).toBe(401);
+      expect((await judges()).map((j) => j.check)).toEqual([
+        "attribution_claude",
+      ]);
+    } finally {
+      restore();
+    }
   });
 
   test("agent uploads keep checked records and warn about dropped records without overwriting", async () => {
-    const { key } = (await (await call("GET", "")).json()) as { key: string };
-    const before = hub.store.judges(key);
-    const original = before[0]!;
-    const upload = (records: unknown[]) =>
-      fetch(
-        hub.url + runPath.replace("/api/runs/", "/api/agent/runs/") + "/judges",
-        {
-          method: "PUT",
-          headers: {
-            authorization: `Bearer ${T.agent}`,
-            "content-type": "application/json",
+    const restore = snapshot();
+    try {
+      const { key } = (await (await call("GET", "")).json()) as { key: string };
+      const before = hub.store.judges(key);
+      const original = before[0]!;
+      const upload = (records: unknown[]) =>
+        fetch(
+          hub.url +
+            runPath.replace("/api/runs/", "/api/agent/runs/") +
+            "/judges",
+          {
+            method: "PUT",
+            headers: {
+              authorization: `Bearer ${T.agent}`,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ records }),
           },
-          body: JSON.stringify({ records }),
-        },
-      );
-    const zero = { ...original, check: "zero_joined", joined: 0 };
-    const mixed = await upload([original, zero]);
-    expect(mixed.status).toBe(200);
-    expect(await mixed.json()).toEqual({
-      stored: 1,
-      dropped: [zero.check],
-      warn: "dropped 1 judge record(s) that joined no human label: zero_joined",
-    });
-    expect((await judges()).some((j) => j.check === zero.check)).toBe(false);
-    expect(hub.store.judges(key)).toEqual(before);
+        );
+      const zero = { ...original, check: "zero_joined", joined: 0 };
+      const mixed = await upload([original, zero]);
+      expect(mixed.status).toBe(200);
+      expect(await mixed.json()).toEqual({
+        stored: 1,
+        dropped: [zero.check],
+        warn: "dropped 1 judge record(s) that joined no human label: zero_joined",
+      });
+      expect((await judges()).some((j) => j.check === zero.check)).toBe(false);
+      expect(hub.store.judges(key)).toEqual(before);
 
-    const dropped = await upload([
-      { ...original, joined: 0 },
-      { ...original, check: "string_joined", joined: "1" },
-      { ...original, check: "missing_joined", joined: undefined },
-      { ...original, check: "negative_joined", joined: -1 },
-    ]);
-    expect(await dropped.json()).toEqual({
-      stored: 0,
-      dropped: [
-        original.check,
-        "string_joined",
-        "missing_joined",
-        "negative_joined",
-      ],
-      warn: `dropped 4 judge record(s) that joined no human label: ${original.check}, string_joined, missing_joined, negative_joined`,
-    });
-    expect(hub.store.judges(key)).toEqual(before);
-    const kept = await upload([original, { check: "bad_shape" }]);
-    expect(await kept.json()).toEqual({ stored: 1 });
+      const dropped = await upload([
+        { ...original, joined: 0 },
+        { ...original, check: "string_joined", joined: "1" },
+        { ...original, check: "missing_joined", joined: undefined },
+        { ...original, check: "negative_joined", joined: -1 },
+      ]);
+      expect(await dropped.json()).toEqual({
+        stored: 0,
+        dropped: [
+          original.check,
+          "string_joined",
+          "missing_joined",
+          "negative_joined",
+        ],
+        warn: `dropped 4 judge record(s) that joined no human label: ${original.check}, string_joined, missing_joined, negative_joined`,
+      });
+      expect(hub.store.judges(key)).toEqual(before);
+      const kept = await upload([original, { check: "bad_shape" }]);
+      expect(await kept.json()).toEqual({ stored: 1 });
+    } finally {
+      restore();
+    }
   });
 
   test("summary omits legacy zero-joined records stored directly", async () => {
-    const { key } = (await (await call("GET", "")).json()) as { key: string };
-    const before = hub.store.judges(key);
-    const zero = { ...before[0]!, check: "legacy_zero", joined: 0 };
-    hub.store.putJudges(key, [zero]);
+    const restore = snapshot();
     try {
+      const { key } = (await (await call("GET", "")).json()) as { key: string };
+      const before = hub.store.judges(key);
+      const zero = { ...before[0]!, check: "legacy_zero", joined: 0 };
+      hub.store.putJudges(key, [zero]);
       expect(await judges()).toEqual(before);
       expect(hub.store.judges(key)).toContainEqual(zero);
     } finally {
-      hub.store.deleteJudge(key, zero.check);
+      restore();
     }
   });
 

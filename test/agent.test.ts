@@ -800,6 +800,8 @@ describe("agent", () => {
   });
 
   test("cancel stops the run after the pair in flight; retry resumes it in one event sequence", async () => {
+    // Register the suites before enqueueing so this test can run first.
+    await once();
     const enq = await get("/api/runs", T.admin, {
       method: "POST",
       body: JSON.stringify({ project: "demo", suite: "slow", run_id: "s1" }),
