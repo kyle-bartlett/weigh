@@ -16,6 +16,11 @@ type Field = {
   /** The product's own verdict, when the suite stored one. */
   correct?: boolean;
 };
+const verdict = (f: Field) => f.correct ?? f.got === f.expected;
+const normalized = (v: FieldValue): FieldValue =>
+  typeof v === "string" ? v.trim().toLowerCase().replace(/\s+/g, " ") : v;
+// Runs recorded before suites could declare money fields fall back to these keys, which must never hold a year or a count.
+const DEFAULT_MONEY_FIELDS = ["tiv", "targetPremium"];
 type StoredOutputs = Map<
   string,
   { output?: VariantOutput; truncated: boolean } | undefined
@@ -71,37 +76,48 @@ function answer(output: unknown) {
 }
 
 function fieldTable(run: Run, outputs: StoredOutputs): string {
+  const money = new Set(run.meta?.moneyFields ?? DEFAULT_MONEY_FIELDS);
   const current = run.meta?.baseline;
   const next = run.meta?.candidate;
   const before = answer(
     current ? outputs.get(current)?.output?.output : undefined,
   );
   const after = answer(next ? outputs.get(next)?.output?.output : undefined);
-  const value = (v: FieldValue, decision: boolean) =>
-    v === null ? "Not provided" : decision ? productDecisionValue(v) : esc(v);
+  const value = (v: FieldValue, decision: boolean, key: string): string => {
+    if (v === null) return "Not provided";
+    if (decision) return productDecisionValue(v);
+    if (money.has(key) && typeof v === "number" && Number.isFinite(v))
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: Number.isInteger(v) ? 0 : 2,
+        maximumFractionDigits: 2,
+      }).format(v);
+    return esc(v);
+  };
   const row = (name: string, a?: Field, b?: Field, decision = false) => {
-    // The product scored the answer with its own normalization; only fall back to equality when no verdict was stored.
+    // A stored verdict wins over equality. Versions disagree when their verdicts differ, or when both are wrong with different normalized answers.
     const cell = (field?: Field) => {
       if (!field) return "<td>No stored answer for this field.</td>";
-      const ok = field.correct ?? field.got === field.expected;
-      return `<td${ok ? "" : ' class="field-difference"'}>${value(field.got, decision)}<span class="field-verdict">${ok ? "Matches" : "Differs from"} the expert</span></td>`;
+      const ok = verdict(field);
+      return `<td${ok ? "" : ' class="field-difference"'}>${value(field.got, decision, name)}<span class="field-verdict">${ok ? "Matches" : "Differs from"} the expert</span></td>`;
     };
     const expected =
       a && b && a.expected !== b.expected
-        ? `Current prompt: ${value(a.expected, decision)}<br>New prompt: ${value(b.expected, decision)}<br>Stored expert answers differ.`
-        : value((a ?? b)!.expected, decision);
-    const differs = a && b && a.got !== b.got;
-    return `<tr${differs ? ' data-different="true"' : ""}><th scope="row">${esc(name)}${differs ? '<span class="case-decision">Versions disagree</span>' : ""}</th><td>${expected}</td>${cell(a)}${cell(b)}</tr>`;
+        ? `Current prompt: ${value(a.expected, decision, name)}<br>New prompt: ${value(b.expected, decision, name)}<br>Stored expert answers differ.`
+        : value((a ?? b)!.expected, decision, name);
+    const differs =
+      a &&
+      b &&
+      (verdict(a) !== verdict(b) ||
+        (!verdict(a) &&
+          !verdict(b) &&
+          normalized(a.got) !== normalized(b.got)));
+    return `<tr${differs ? ' data-different="true"' : ""}><th scope="row">${esc(name.replace(/_/g, " "))}${differs ? '<span class="field-disagree">Versions disagree</span>' : ""}</th><td>${expected}</td>${cell(a)}${cell(b)}</tr>`;
   };
   const rows =
     [...new Set([...before.fields.keys(), ...after.fields.keys()])]
-      .map((name) =>
-        row(
-          name.replace(/_/g, " "),
-          before.fields.get(name),
-          after.fields.get(name),
-        ),
-      )
+      .map((name) => row(name, before.fields.get(name), after.fields.get(name)))
       .join("") +
     (before.decision || after.decision
       ? row("Decision", before.decision, after.decision, true)

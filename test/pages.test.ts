@@ -95,8 +95,10 @@ describe("hub pages", () => {
       checks: [],
       baseline: "v1",
       candidate: "v1",
+      moneyFields: ["units"],
       timeline,
     });
+    expect(suite.moneyFields).toEqual(["units"]);
     const info = suiteInfo(suite as unknown as Suite);
     expect(info.timeline).toEqual(timeline);
     const row = {
@@ -266,6 +268,174 @@ describe("hub pages", () => {
     expect(html).toContain("/web/run.js");
     expect(html).toContain('data-live="false"');
     expect(html).not.toMatch(DASH);
+  });
+
+  test("case disagreement follows verdicts and normalized wrong answers", () => {
+    const lines = b.lines.filter((l) => l.case_id === "GOLD-01");
+    const stored = (output: unknown) => ({
+      output: { output, usage: lines[0]!.usage },
+      truncated: false,
+    });
+    const fields = [
+      {
+        field: "county",
+        expected: "Harris County",
+        got: "Harris",
+        correct: true,
+      },
+      { field: "verdict", expected: "Frame", got: "Frame", correct: true },
+      {
+        field: "case_space",
+        expected: "Masonry",
+        got: "frame",
+        correct: false,
+      },
+      {
+        field: "internal_space",
+        expected: "Masonry",
+        got: "wood frame",
+        correct: false,
+      },
+      { field: "different", expected: "Masonry", got: "Frame", correct: false },
+      { field: "null_same", expected: "Masonry", got: null, correct: false },
+      {
+        field: "null_different",
+        expected: "Masonry",
+        got: null,
+        correct: false,
+      },
+      { field: "number_same", expected: 3, got: 1, correct: false },
+      { field: "number_different", expected: 3, got: 1, correct: false },
+      { field: "number_string", expected: 3, got: 1, correct: false },
+    ];
+    const got = [
+      "Harris County",
+      "Frame",
+      " Frame ",
+      " Wood\t  Frame ",
+      "Steel",
+      null,
+      "null",
+      1,
+      2,
+      "1",
+    ];
+    const html = casePage(
+      project,
+      run,
+      "GOLD-01",
+      undefined,
+      lines,
+      new Map([
+        [b.meta.baseline, stored({ fields })],
+        [
+          b.meta.candidate,
+          stored({
+            fields: fields.map((f, i) => ({
+              ...f,
+              got: got[i],
+              correct: i === 0,
+            })),
+          }),
+        ],
+      ]),
+    );
+    const rows = html.match(/<tr[^>]*><th scope="row">[^]*?<\/tr>/g)!;
+    expect(rows).toHaveLength(fields.length);
+    for (const [i, row] of rows.entries()) {
+      const differs = [1, 4, 6, 8, 9].includes(i);
+      expect(row.includes('data-different="true"')).toBe(differs);
+      expect(
+        row.includes('<span class="field-disagree">Versions disagree</span>'),
+      ).toBe(differs);
+      if (!differs) expect(row).not.toContain("Versions disagree");
+    }
+    expect(html).toMatch(
+      /\.field-table \.field-disagree\{[^}]*font-size:10\.5px;[^}]*font-weight:400;/,
+    );
+  });
+
+  test("case formats only declared money fields with legacy defaults", () => {
+    const lines = b.lines.filter((l) => l.case_id === "GOLD-01");
+    const stored = (output: unknown) => ({
+      output: { output, usage: lines[0]!.usage },
+      truncated: false,
+    });
+    const fields = Object.entries({
+      tiv: 4200000,
+      targetPremium: 38000,
+      yearBuilt: 1998,
+      units: 24,
+      custom_amount: 1234.567,
+      text_amount: "38000",
+      null_amount: null,
+    }).map(([field, got]) => ({ field, got, expected: got }));
+    const outputs = new Map([
+      [b.meta.baseline, stored({ fields })],
+      [b.meta.candidate, stored({ fields })],
+    ]);
+    const table = (moneyFields?: string[]) =>
+      casePage(
+        project,
+        { ...run, meta: { ...b.meta, moneyFields } },
+        "GOLD-01",
+        undefined,
+        lines,
+        outputs,
+      ).match(/<table class="field-table">[^]*?<\/table>/)![0];
+    const legacy = table();
+    expect(legacy.match(/\$4,200,000/g)).toHaveLength(3);
+    expect(legacy.match(/\$38,000/g)).toHaveLength(3);
+    expect(legacy).toContain("1998");
+    expect(legacy).toContain("24");
+    expect(legacy).not.toContain("1,998");
+    expect(legacy).not.toContain("$1,998");
+    const custom = table(["units"]);
+    expect(custom.match(/\$24/g)).toHaveLength(3);
+    expect(custom).toContain("4200000");
+    expect(custom).not.toContain("$4,200,000");
+    const amounts = table(["custom_amount", "text_amount", "null_amount"]);
+    expect(amounts).toContain(
+      '<th scope="row">custom amount</th><td>$1,234.57</td>',
+    );
+    expect(amounts).toContain('<th scope="row">text amount</th><td>38000</td>');
+    expect(amounts).toContain(
+      '<th scope="row">null amount</th><td>Not provided</td>',
+    );
+    expect(table([])).not.toContain("$");
+  });
+
+  test("case shows unknown decisions once per cell and keeps known descriptions", () => {
+    const lines = b.lines.filter((l) => l.case_id === "GOLD-01");
+    const stored = (output: unknown) => ({
+      output: { output, usage: lines[0]!.usage },
+      truncated: false,
+    });
+    const decisionRow = (decision: string) =>
+      casePage(
+        project,
+        run,
+        "GOLD-01",
+        undefined,
+        lines,
+        new Map([
+          [
+            b.meta.baseline,
+            stored({ fields: [], decision, expectedDecision: decision }),
+          ],
+        ]),
+      ).match(/<tr[^>]*><th scope="row">Decision<\/th>[^]*?<\/tr>/)![0];
+    const unknown = decisionRow("DECLINED");
+    // Expected and the stored answer each show one tag.
+    expect(unknown.match(/DECLINED/g)).toHaveLength(2);
+    const cells = unknown.match(/<td>[^]*?<\/td>/g)!;
+    for (const cell of cells.slice(0, 2)) {
+      expect(cell.match(/DECLINED/g)).toHaveLength(1);
+      expect(cell).toContain('<span class="case-decision"><span class="tag"');
+    }
+    const known = decisionRow("REFERRED");
+    expect(known).toContain("send to an underwriter");
+    expect(known).toContain(">REFERRED</span>");
   });
 
   test("case handles nulls, missing fields, invalid outputs and conflicting expert answers", () => {

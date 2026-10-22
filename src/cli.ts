@@ -107,6 +107,7 @@ export const SuiteSchema = z
       })
       .optional(),
     noise: z.string().optional(),
+    moneyFields: z.array(z.string().min(1)).optional(),
     concurrency: z.number().int().positive().optional(),
     inputText: isFn.optional(),
     skipped: isFn.optional(),

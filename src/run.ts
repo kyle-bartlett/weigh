@@ -176,6 +176,7 @@ export async function runSuite(suite: Suite, opts: RunOptions = {}) {
     candidate: suite.candidate,
     gate: suite.gate,
     noise: suite.noise,
+    moneyFields: suite.moneyFields,
     command: opts.command ?? `bun src/cli.ts run suites/${suite.name}.ts`,
   };
   writeFileSync(
@@ -298,6 +299,7 @@ export async function rescore(suite: Suite, dir: string) {
   meta.candidate = suite.candidate;
   meta.gate = suite.gate;
   meta.noise = suite.noise;
+  meta.moneyFields = suite.moneyFields;
   meta.rescored_at = new Date().toISOString();
   writeFileSync(join(dir, "run.json"), JSON.stringify(meta, null, 1));
   return { lines: lines.length, scored, changed };

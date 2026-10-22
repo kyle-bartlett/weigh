@@ -592,6 +592,7 @@ const suite: Suite = {
   baseline: "v2",
   candidate: "v3",
   noise: "v2-repeat",
+  moneyFields: ["tiv", "targetPremium"],
   gate: {
     maxPassAllDrop: 0,
     noRegressionOn: ["decision_correct", "fields_correct"],

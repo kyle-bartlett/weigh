@@ -111,6 +111,8 @@ export interface Suite {
   gate?: Gate;
   /** A variant that is the baseline run again. Its distance from the baseline is the noise floor the report shows next to the candidate's change. */
   noise?: string;
+  /** Answer fields holding US dollar amounts. The case page shows them with a dollar sign and thousands separators. Default: tiv and targetPremium. */
+  moneyFields?: string[];
   /** Parallel variant runs. Default 2. */
   concurrency?: number;
   /** Short text of a case for the review page. Default: the input as JSON, trimmed to 4,000 characters. */
@@ -156,5 +158,7 @@ export interface RunMeta {
   candidate: string;
   gate?: Gate;
   noise?: string;
+  /** Answer fields holding US dollar amounts for case page formatting. */
+  moneyFields?: string[];
   command: string;
 }

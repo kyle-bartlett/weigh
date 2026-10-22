@@ -318,7 +318,11 @@ export function productDecisionValue(value: unknown): string {
     REFERRED: "send to an underwriter",
     "IN APPETITE": "quote it",
   };
-  return `<span class="case-decision">${esc(words[String(value)] ?? String(value))} ${tag(String(value), "The decision returned by the product")}</span>`;
+  const raw = String(value);
+  const plain = Object.hasOwn(words, raw) ? words[raw] : undefined;
+  const chip = tag(raw, "The decision returned by the product");
+  // An unknown decision has no plain words, so the tag alone shows it once.
+  return `<span class="case-decision">${plain === undefined ? chip : `${esc(plain)} ${chip}`}</span>`;
 }
 function checkDetail(b: Built, l?: TraceLine): string {
   if (!l) return "Waiting for this prompt.";
