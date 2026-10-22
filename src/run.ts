@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { RunnerEvent } from "./events.ts";
+import { textRuleMessage, textRuleReason } from "./suite-text.ts";
 import type {
   Case,
   RunMeta,
@@ -139,6 +140,20 @@ async function runOne(
 export async function runSuite(suite: Suite, opts: RunOptions = {}) {
   const runId = opts.runId ?? newRunId();
   const dir = runDir(suite.name, runId);
+  // Suites may fill skipped while building cases, so read it only after cases().
+  const all = await suite.cases();
+  const skipped = suite.skipped?.() ?? [];
+  for (const entry of skipped) {
+    const reason = textRuleReason(entry.reason);
+    if (reason)
+      throw new Error(
+        textRuleMessage(
+          `skipped case "${entry.id}" reason`,
+          suite.name,
+          reason,
+        ),
+      );
+  }
   mkdirSync(join(dir, "outputs"), { recursive: true });
   const log = opts.log ?? ((s: string) => console.error(s));
   let seq = 0;
@@ -148,7 +163,6 @@ export async function runSuite(suite: Suite, opts: RunOptions = {}) {
       seq: ++seq,
       at: new Date().toISOString(),
     } as RunnerEvent);
-  const all = await suite.cases();
   const cases = opts.cases
     ? all.filter((c) => opts.cases!.includes(c.id))
     : all;
@@ -161,7 +175,7 @@ export async function runSuite(suite: Suite, opts: RunOptions = {}) {
     description: suite.description,
     started_at: new Date().toISOString(),
     cases: cases.length,
-    skipped: suite.skipped?.() ?? [],
+    skipped,
     // Every suite variant is listed, even when --variants ran a subset: later runs with the same id fill the rest.
     variants: suite.variants.map((v) => ({
       name: v.name,

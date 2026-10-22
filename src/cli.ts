@@ -24,6 +24,7 @@ import {
   runSuite,
 } from "./run.ts";
 import { pct } from "./stats.ts";
+import { textRuleMessage, textRuleReason } from "./suite-text.ts";
 import type { Suite, TraceLine } from "./types.ts";
 
 /**
@@ -126,6 +127,32 @@ export const SuiteSchema = z
           message: `variant "${variant.name}" in suite "${s.name}" ${reason}; rename it (variant names may not contain an en dash or em dash or end with "+")`,
         });
     }
+    const checkText = (
+      text: string,
+      field: string,
+      path: (string | number)[],
+    ) => {
+      const reason = textRuleReason(text);
+      if (reason)
+        ctx.addIssue({
+          code: "custom",
+          path,
+          message: textRuleMessage(field, s.name, reason),
+        });
+    };
+    checkText(s.description, "description", ["description"]);
+    for (const [i, variant] of s.variants.entries())
+      checkText(variant.description, `variant "${variant.name}" description`, [
+        "variants",
+        i,
+        "description",
+      ]);
+    for (const [i, check] of s.checks.entries())
+      checkText(check.description, `check "${check.id}" description`, [
+        "checks",
+        i,
+        "description",
+      ]);
     const names = new Set(s.variants.map((v) => v.name));
     for (const k of ["baseline", "candidate", "noise"] as const) {
       const v = s[k];
