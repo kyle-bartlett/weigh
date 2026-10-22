@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { allIn, check, noEmDash } from "../src/checks.ts";
+import { sanitizeSuiteText } from "../src/suite-text.ts";
 import {
   addUsage,
   emptyUsage,
@@ -175,7 +176,10 @@ async function videoInput(
   } catch (e) {
     skipped.push({
       id,
-      reason: String(e instanceof Error ? e.message : e).slice(0, 120),
+      // Error text is runtime-sourced, so it is cleaned to the suite text rule instead of failing the run.
+      reason: sanitizeSuiteText(
+        String(e instanceof Error ? e.message : e).slice(0, 120),
+      ),
     });
     return null;
   }

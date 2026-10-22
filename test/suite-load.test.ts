@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSuite } from "../src/cli.ts";
+import { sanitizeSuiteText, textRuleReason } from "../src/suite-text.ts";
 
 const dirs: string[] = [];
 const suiteName = "naming-suite";
@@ -271,5 +272,33 @@ describe("loadSuite variant names", () => {
           )
           .join("\n"),
     );
+  });
+});
+
+describe("runtime-sourced suite text", () => {
+  test("sanitizeSuiteText turns dashes into hyphens and drops the plus after a number", () => {
+    const cases: [string, string][] = [
+      [
+        "ERROR: video unavailable \u2014 retry later",
+        "ERROR: video unavailable - retry later",
+      ],
+      ["pages 3\u20135", "pages 3-5"],
+      ["1+ formats failed", "1 formats failed"],
+      ["seen 300+", "seen 300"],
+      ["tried 2++ times.", "tried 2 times."],
+      ["(10+)", "(10)"],
+      ["C++ and 1+1 and v2+beta stay", "C++ and 1+1 and v2+beta stay"],
+      ["plain text", "plain text"],
+    ];
+    for (const [input, expected] of cases) {
+      const out = sanitizeSuiteText(input);
+      expect(out).toBe(expected);
+      expect(textRuleReason(out)).toBeUndefined();
+    }
+    // Author text keeps failing loudly: the rule itself is unchanged.
+    expect(textRuleReason("seen 300+")).toBe(
+      'contains a number followed by "+"',
+    );
+    expect(textRuleReason("a \u2014 b")).toBe("contains an en dash or em dash");
   });
 });

@@ -34,6 +34,7 @@ import { type LabelRow, SPLITS, validate } from "../judge.ts";
 import { readAnalyticsSite, withAnalytics } from "./pages/layout.ts";
 import { labelsPage } from "./pages/labels.ts";
 import { scopesOf } from "./auth.ts";
+import { textRuleReason } from "../suite-text.ts";
 
 /**
  * The hub: one Bun.serve, a route table, no framework. Public GETs for public projects, bearer or
@@ -601,6 +602,19 @@ export function startHub(o: HubOptions) {
       const b = (await readJson(c)) as Partial<Project> & { id?: string };
       if (!b.id || !/^[a-z0-9][a-z0-9-]*$/.test(b.id))
         throw new HttpError(400, "id must be a lowercase slug");
+      // Name and description are shown on public pages, so they follow the suite text rule.
+      for (const field of ["name", "description"] as const) {
+        const value = b[field];
+        if (value === undefined) continue;
+        if (typeof value !== "string")
+          throw new HttpError(400, `${field} must be a string`);
+        const reason = textRuleReason(value);
+        if (reason)
+          throw new HttpError(
+            400,
+            `${field} ${reason}; rewrite it (project text may not contain an en dash or em dash or a number followed by "+")`,
+          );
+      }
       const p = store.upsertProject({ ...scrub(b), id: b.id });
       return json(p, 201);
     }),

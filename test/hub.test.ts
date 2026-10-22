@@ -208,6 +208,49 @@ describe("hub", () => {
     expect(after.last_seq).toBe(ids.at(-1)!);
   });
 
+  test("project name and description follow the suite text rule and a refusal stores nothing", async () => {
+    const post = (body: Record<string, unknown>) =>
+      fetch(hub.url + "/api/projects", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${T.admin}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ id: "text-rule", ...body }),
+      });
+    const rule =
+      'rewrite it (project text may not contain an en dash or em dash or a number followed by "+")';
+    for (const [body, error] of [
+      [
+        { name: "Triage \u2014 v2" },
+        `name contains an en dash or em dash; ${rule}`,
+      ],
+      [
+        { name: "Triage", description: "scores 300+ cases" },
+        `description contains a number followed by "+"; ${rule}`,
+      ],
+      [
+        { description: "pages 3\u20135" },
+        `description contains an en dash or em dash; ${rule}`,
+      ],
+      [{ name: 7 }, "name must be a string"],
+    ] as const) {
+      const res = await post(body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: error });
+      expect(hub.store.getProject("text-rule")).toBeUndefined();
+    }
+    const ok = await post({
+      name: "Triage - v2",
+      description: "scores more than 300 cases",
+    });
+    expect(ok.status).toBe(201);
+    expect(hub.store.getProject("text-rule")).toMatchObject({
+      name: "Triage - v2",
+      description: "scores more than 300 cases",
+    });
+  });
+
   test("agent endpoints refuse the read token and public pages reject unknown routes", async () => {
     const res = await fetch(hub.url + "/api/agent/runs", {
       method: "POST",
