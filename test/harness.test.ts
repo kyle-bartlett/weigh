@@ -100,6 +100,9 @@ describe("judge metrics", () => {
     expect(() =>
       parseLabels('{"case_id":"a","human":"pass","split":"all"}'),
     ).toThrow("split must be train, dev or test");
+    expect(parseLabels('{"case_id":"a","human":"pass","split":null}')).toEqual([
+      { case_id: "a", human: "pass" },
+    ]);
     const v = validate(
       labels,
       (l) =>

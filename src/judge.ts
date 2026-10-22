@@ -62,15 +62,19 @@ export function parseLabels(text: string): LabelRow[] {
     .map((l, i) => [l.trim(), i + 1] as const)
     .filter(([l]) => l)
     .map(([l, line]) => {
-      const r = JSON.parse(l) as LabelRow;
+      const r = JSON.parse(l) as Omit<LabelRow, "split"> & {
+        split?: LabelRow["split"] | null;
+      };
       if (r.human !== "pass" && r.human !== "fail")
         throw new Error(`line ${line}: human must be "pass" or "fail"`);
       if (r.judge !== undefined && r.judge !== "pass" && r.judge !== "fail")
         throw new Error(`line ${line}: judge must be "pass" or "fail"`);
       if (!r.case_id) throw new Error(`line ${line}: case_id missing`);
+      // A null split means no split, matching how the hub labels routes read it.
+      if (r.split === null) delete r.split;
       if (r.split !== undefined && !SPLITS.includes(r.split))
         throw new Error(`line ${line}: split must be train, dev or test`);
-      return r;
+      return r as LabelRow;
     });
 }
 
