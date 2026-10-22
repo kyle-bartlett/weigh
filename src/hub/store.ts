@@ -500,6 +500,39 @@ export class Store {
         );
     })();
   }
+  /** Insert labels for keys that have none; an existing row is never changed. Returns how many were inserted. */
+  insertLabels(
+    run: Run,
+    rows: {
+      case_id: string;
+      variant: string;
+      human: "pass" | "fail";
+      note?: string;
+      split?: string;
+    }[],
+  ): number {
+    const stmt = this.db.prepare(
+      `INSERT INTO labels (project_id, suite, run_key, case_id, variant, human, note, split, at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(run_key, case_id, variant) DO NOTHING`,
+    );
+    let inserted = 0;
+    this.db.transaction(() => {
+      for (const r of rows)
+        inserted += stmt.run(
+          run.project_id,
+          run.suite,
+          run.key,
+          r.case_id,
+          r.variant,
+          r.human,
+          r.note ?? "",
+          r.split ?? null,
+          now(),
+        ).changes;
+    })();
+    return inserted;
+  }
   /** Human answers for this run, counted once per case and version, not per grader. */
   labelCount(key: string): number {
     return (

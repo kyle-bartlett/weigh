@@ -154,7 +154,7 @@ export class HubClient {
     runId: string,
     agentId: string,
     labels: unknown[],
-  ): Promise<{ stored: number; total: number }> {
+  ): Promise<{ inserted: number; skipped: number; total: number }> {
     return this.json(
       "PUT",
       `/api/agent/runs/${enc(suite)}/${enc(runId)}/labels`,

@@ -193,10 +193,7 @@ export function startHub(o: HubOptions) {
     if (!run) throw new HttpError(404, "no such run");
     return run;
   };
-  const storeLabels = (
-    run: Run,
-    input: unknown,
-  ): { stored: number; total: number } => {
+  const labelRows = (input: unknown) => {
     if (!Array.isArray(input))
       throw new HttpError(400, "labels must be an array");
     const rows = input.filter(
@@ -216,8 +213,29 @@ export function startHub(o: HubOptions) {
         ((r as { human?: unknown }).human === "pass" ||
           (r as { human?: unknown }).human === "fail"),
     );
-    store.upsertLabels(run, scrub(rows));
+    return scrub(rows);
+  };
+  /** The review page's write: a person's label replaces the stored one. */
+  const storeLabels = (
+    run: Run,
+    input: unknown,
+  ): { stored: number; total: number } => {
+    const rows = labelRows(input);
+    store.upsertLabels(run, rows);
     return { stored: rows.length, total: store.labels(run.key).length };
+  };
+  /** The agent's write: it only fills cases nobody has labelled, so a person's label is never overwritten. */
+  const insertLabels = (
+    run: Run,
+    input: unknown,
+  ): { inserted: number; skipped: number; total: number } => {
+    const rows = labelRows(input);
+    const inserted = store.insertLabels(run, rows);
+    return {
+      inserted,
+      skipped: rows.length - inserted,
+      total: store.labels(run.key).length,
+    };
   };
   const validateJudge = (run: Run, check: string | undefined): JudgeRecord => {
     if (!check || !run.meta?.checks.some((x) => x.id === check))
@@ -857,7 +875,7 @@ export function startHub(o: HubOptions) {
       return json({ cancel: run.cancel_requested });
     }),
 
-    /** Admins or agents on their own claimed run may upload human labels. */
+    /** Admins or agents on their own claimed run may add human labels; existing rows are left untouched. */
     route("PUT", "/api/agent/runs/:suite/:run/labels", async (c) => {
       if (!c.scopes.has("agent") && !c.scopes.has("admin"))
         throw new HttpError(401, "unauthorized");
@@ -867,7 +885,7 @@ export function startHub(o: HubOptions) {
         labels?: unknown;
       };
       needRunOwner(c, run, b.agent_id);
-      return json(storeLabels(run, b.labels ?? []));
+      return json(insertLabels(run, b.labels ?? []));
     }),
     /** Admins or agents on their own claimed run may validate its judges. */
     route("POST", "/api/agent/runs/:suite/:run/judges/validate", async (c) => {

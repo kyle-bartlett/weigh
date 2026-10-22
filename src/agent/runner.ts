@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -202,6 +203,8 @@ function prepare(e: RunEvent, base: number): RunEvent {
 export type LabelsOutcome =
   | {
       uploaded: number;
+      /** Rows the hub already had a label for; the agent never overwrites a person's label. */
+      unchanged: number;
       validated: string[];
       skipped: { check: string; reason: string }[];
     }
@@ -212,6 +215,12 @@ function labelsMessage(hub: HubClient, value: unknown): string {
   return scrubText(
     hub.token ? message.replaceAll(hub.token, "<redacted>") : message,
   ).slice(0, 500);
+}
+
+/** True when `path` is not inside `base` (both already resolved). */
+function isOutside(base: string, path: string): boolean {
+  const local = relative(base, path);
+  return local.startsWith("..") || isAbsolute(local);
 }
 
 /** Label operations are best effort: transient errors get at most three attempts. */
@@ -251,14 +260,14 @@ export async function uploadLabels(o: {
     const meta = readMeta(runDir);
     if (meta.labels === undefined) return { skipped: "no labels declared" };
     const path = resolve(checkout, meta.labels);
-    const local = relative(checkout, path);
-    if (local.startsWith("..") || isAbsolute(local)) {
+    const outsideWarning = () => {
       log(
         "warn",
         `labels path ${meta.labels} is outside the checkout; skipped`,
       );
       return { skipped: "labels path outside the checkout" };
-    }
+    };
+    if (isOutside(checkout, path)) return outsideWarning();
     if (!existsSync(path)) {
       log(
         "warn",
@@ -266,6 +275,9 @@ export async function uploadLabels(o: {
       );
       return { skipped: "labels file not found" };
     }
+    // The lexical check above misses a symlink that points out of the checkout; compare real paths too.
+    if (isOutside(realpathSync(checkout), realpathSync(path)))
+      return outsideWarning();
     let rows: LabelRow[];
     try {
       rows = scrub(
@@ -282,14 +294,19 @@ export async function uploadLabels(o: {
       return { skipped: "labels file could not be parsed" };
     }
     let uploaded: number;
+    let unchanged: number;
     try {
       const result = await retryLabels(
         () => hub.putLabels(job.suite, job.run_id, agentId, rows),
         log,
         "labels upload",
       );
-      uploaded = result.stored;
-      log("info", `labels: ${uploaded} rows uploaded from ${meta.labels}`);
+      uploaded = result.inserted;
+      unchanged = result.skipped;
+      log(
+        "info",
+        `labels: ${uploaded} rows uploaded from ${meta.labels}, ${unchanged} already on the hub left unchanged`,
+      );
     } catch (e) {
       log(
         "warn",
@@ -297,7 +314,12 @@ export async function uploadLabels(o: {
       );
       return { skipped: "labels upload failed" };
     }
-    const outcome: LabelsOutcome = { uploaded, validated: [], skipped: [] };
+    const outcome: LabelsOutcome = {
+      uploaded,
+      unchanged,
+      validated: [],
+      skipped: [],
+    };
     const traces = readTraces(runDir);
     for (const check of meta.checks) {
       if (check.kind !== "judge") continue;

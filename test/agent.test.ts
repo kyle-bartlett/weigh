@@ -16,6 +16,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -94,8 +95,10 @@ describe("labels upload after a finished run", () => {
         if (req.method === "PUT" && path.endsWith("/labels")) {
           const status = putStatuses.shift() ?? 200;
           return status === 200
-            ? Response.json({
-                stored: body.labels!.length,
+            ? // One row is reported as already labelled, so the skipped count is read, not assumed.
+              Response.json({
+                inserted: body.labels!.length - 1,
+                skipped: 1,
                 total: body.labels!.length,
               })
             : new Response(`upload failed ${T.agent}`, { status });
@@ -167,7 +170,8 @@ describe("labels upload after a finished run", () => {
       })),
     ]);
     expect(outcome).toMatchObject({
-      uploaded: 2,
+      uploaded: 1,
+      unchanged: 1,
       validated: ["judge_a"],
       skipped: [
         { check: "judge_b", reason: expect.stringContaining("409") },
@@ -176,7 +180,11 @@ describe("labels upload after a finished run", () => {
     });
     expect(logs).toEqual(
       expect.arrayContaining([
-        { level: "info", message: "labels: 2 rows uploaded from labels.jsonl" },
+        {
+          level: "info",
+          message:
+            "labels: 1 rows uploaded from labels.jsonl, 1 already on the hub left unchanged",
+        },
         {
           level: "info",
           message: "judge judge_a: validated (2 labels joined)",
@@ -194,9 +202,14 @@ describe("labels upload after a finished run", () => {
     );
   });
 
-  test("escaping and missing labels paths each warn once without contacting the hub", async () => {
+  test("escaping, symlinked-out and missing labels paths each warn once without contacting the hub", async () => {
+    // A link inside the checkout whose target is outside it passes a lexical check; the real path must not.
+    const outside = join(tmp, "outside.jsonl");
+    writeFileSync(outside, '{"case_id":"c1","variant":"b","human":"pass"}\n');
+    symlinkSync(outside, join(checkout, "linked.jsonl"));
     for (const [labels, reason] of [
       ["../x.jsonl", "outside the checkout"],
+      ["linked.jsonl", "outside the checkout"],
       ["missing.jsonl", "not found in the checkout"],
     ]) {
       logs = [];
@@ -253,7 +266,8 @@ describe("labels upload after a finished run", () => {
     putStatuses = [503, 200];
     judgeStatuses = { judge_a: [503, 503, 503], judge_b: [200] };
     expect(await upload()).toMatchObject({
-      uploaded: 2,
+      uploaded: 1,
+      unchanged: 1,
       validated: ["judge_b"],
       skipped: [
         {

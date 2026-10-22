@@ -465,7 +465,7 @@ describe("agent labels and judge validation", () => {
       ],
     });
     expect(put.status).toBe(200);
-    expect(await put.json()).toEqual({ stored: 54, total: 54 });
+    expect(await put.json()).toEqual({ inserted: 54, skipped: 0, total: 54 });
     expect(snapshot("owned").labels).toHaveLength(54);
     const validated = await call("POST", path("owned", "/judges/validate"), {
       agent_id: "imac",
@@ -477,8 +477,10 @@ describe("agent labels and judge validation", () => {
     expect<unknown>(
       snapshot("owned").judges.find((j) => j.check === check),
     ).toEqual(record);
+    // A repeat upload leaves every existing row alone.
     expect(await client.putLabels(suite, "owned", "imac", rows)).toEqual({
-      stored: 54,
+      inserted: 0,
+      skipped: 54,
       total: 54,
     });
     const clientRecord = await client.validateJudge(
@@ -586,7 +588,7 @@ describe("agent labels and judge validation", () => {
       project: "demo",
     });
     expect(snapshot(runId).run?.agent_id).toBeFalsy();
-    for (const agentId of [undefined, "Bad ID", "other"]) {
+    for (const [i, agentId] of [undefined, "Bad ID", "other"].entries()) {
       const put = await call(
         "PUT",
         path(runId, "/labels"),
@@ -594,7 +596,12 @@ describe("agent labels and judge validation", () => {
         T.admin,
       );
       expect(put.status).toBe(200);
-      expect(await put.json()).toEqual({ stored: 54, total: 54 });
+      // The agent route only inserts, whoever calls it: later passes find every row already there.
+      expect(await put.json()).toEqual(
+        i === 0
+          ? { inserted: 54, skipped: 0, total: 54 }
+          : { inserted: 0, skipped: 54, total: 54 },
+      );
       expect(snapshot(runId).labels).toHaveLength(54);
       const validated = await call(
         "POST",
@@ -639,7 +646,7 @@ describe("agent labels and judge validation", () => {
           await client.putLabels(suite, "conflict", "imac", [
             { case_id: "GOLD-01", variant: "absent", human: "pass" },
           ]),
-        ).toEqual({ stored: 1, total: 1 });
+        ).toEqual({ inserted: 1, skipped: 0, total: 1 });
       }
       const before = snapshot("conflict");
       const message = absent
@@ -667,6 +674,35 @@ describe("agent labels and judge validation", () => {
         `POST ${path("conflict", "/judges/validate")}: 409 ${JSON.stringify({ error: message })}`,
       );
       expect(snapshot("conflict")).toEqual(before);
+    }
+  });
+
+  test("the agent never overwrites a person's label, even to move its split", async () => {
+    await claimedRun("guarded");
+    const person = {
+      case_id: "GOLD-01",
+      variant: "v3",
+      human: "pass",
+      note: "admin reviewed",
+      split: "test",
+    };
+    const admin = await call(
+      "PUT",
+      path("guarded", "/labels", false),
+      { labels: [person] },
+      T.admin,
+    );
+    expect(admin.status).toBe(200);
+    const before = snapshot("guarded").labels;
+    expect(before).toEqual([expect.objectContaining(person)]);
+    for (const split of [undefined, "train"]) {
+      const put = await call("PUT", path("guarded", "/labels"), {
+        agent_id: "imac",
+        labels: [{ case_id: "GOLD-01", variant: "v3", human: "fail", split }],
+      });
+      expect(put.status).toBe(200);
+      expect(await put.json()).toEqual({ inserted: 0, skipped: 1, total: 1 });
+      expect(snapshot("guarded").labels).toEqual(before);
     }
   });
 
