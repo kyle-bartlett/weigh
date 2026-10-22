@@ -214,6 +214,63 @@ describe("agent re-registration", () => {
   });
 });
 
+describe("agent once with a missing checkout", () => {
+  let hub: ReturnType<typeof startHub> | undefined;
+  let tmp: string;
+  let previousToken: string | undefined;
+
+  beforeAll(() => {
+    tmp = mkdtempSync(join(tmpdir(), "weigh-agent-missing-"));
+    previousToken = process.env.WEIGH_AGENT_TOKEN;
+    process.env.WEIGH_AGENT_TOKEN = T.agent;
+    hub = startHub({ port: 0, dbPath: join(tmp, "hub.db"), tokens: T });
+  });
+  afterAll(() => {
+    if (previousToken === undefined) delete process.env.WEIGH_AGENT_TOKEN;
+    else process.env.WEIGH_AGENT_TOKEN = previousToken;
+    hub?.stop();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test("settles after two register-first retries when registration keeps failing", async () => {
+    const config = join(tmp, "agent.json");
+    writeFileSync(
+      config,
+      JSON.stringify({
+        hub: hub!.url,
+        agent_id: "test-agent",
+        weigh_home: ROOT,
+        workdir: join(tmp, "work"),
+        runs_dir: join(tmp, "runs"),
+        projects: [{ id: "demo", path: join(tmp, "missing"), pull: false }],
+        poll_wait_s: 1,
+      }),
+    );
+    const lines: string[] = [];
+    const ac = new AbortController();
+    const agent = startAgent(config, {
+      once: true,
+      retryDelayMs: 10,
+      log: (line) => lines.push(line),
+      signal: ac.signal,
+    }).then(() => "resolved");
+    let outcome: string | undefined;
+    try {
+      outcome = await Promise.race([
+        agent,
+        Bun.sleep(5000).then(() => "timeout"),
+      ]);
+      expect(outcome).toBe("resolved");
+      const claims = lines.filter((line) => line.startsWith("[warn] claim:"));
+      expect(claims).toHaveLength(3);
+      for (const claim of claims) expect(claim).toMatch(/register first/);
+    } finally {
+      ac.abort();
+      if (outcome === "timeout") await agent;
+    }
+  });
+});
+
 describe("agent once with an unavailable hub", () => {
   let tmp: string;
   let previousToken: string | undefined;
@@ -262,16 +319,19 @@ describe("agent once with an unavailable hub", () => {
       suites: 1,
     });
     const lines: string[] = [];
+    const ac = new AbortController();
+    const agent = startAgent(config, {
+      once: true,
+      retryDelayMs: 10,
+      log: (line) => lines.push(line),
+      signal: ac.signal,
+    }).then(
+      () => "resolved",
+      () => "rejected",
+    );
+    let outcome: string | undefined;
     try {
-      const agent = startAgent(config, {
-        once: true,
-        retryDelayMs: 10,
-        log: (line) => lines.push(line),
-      }).then(
-        () => "resolved",
-        () => "rejected",
-      );
-      const outcome = await Promise.race([
+      outcome = await Promise.race([
         agent,
         Bun.sleep(5000).then(() => "timeout"),
       ]);
@@ -281,6 +341,8 @@ describe("agent once with an unavailable hub", () => {
         lines.filter((line) => line.startsWith("[warn] claim:")),
       ).toHaveLength(1);
     } finally {
+      ac.abort();
+      if (outcome === "timeout") await agent;
       register.mockRestore();
     }
   });

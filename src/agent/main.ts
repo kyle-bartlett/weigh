@@ -49,6 +49,8 @@ export async function startAgent(
     once?: boolean;
     retryDelayMs?: number;
     log?: (s: string) => void;
+    // Stop at the next loop iteration after cancellation.
+    signal?: AbortSignal;
   } = {},
 ) {
   const c = loadConfig(configPath);
@@ -180,8 +182,10 @@ export async function startAgent(
   // A stuck registration backs off: discovery fetches every remote, so after the first retry the
   // next attempts wait 1, 3, 7, then 11 loops (each loop is a poll or a retry delay).
   let registerFails = 0;
+  let registerFirstRetries = 0;
   let registerWait = 0;
   for (;;) {
+    if (opts.signal?.aborted) return;
     let job: Job | undefined;
     if (needRegister && registerWait > 0) {
       registerWait--;
@@ -210,10 +214,13 @@ export async function startAgent(
     } catch (e) {
       const msg = String(e instanceof Error ? e.message : e);
       log("warn", `claim: ${msg.slice(0, 200)}`);
-      // A redeployed hub forgot this agent: register again on the next loop instead of waiting it out.
-      if (msg.includes("register first")) needRegister = true;
-      // Once mode retries "register first" so a redeployed hub can recover registration.
-      else if (opts.once) return;
+      // Once mode retries "register first" at most twice for hub redeploy recovery,
+      // then gives up so a one-shot run cannot loop forever.
+      if (msg.includes("register first")) {
+        registerFirstRetries++;
+        if (opts.once && registerFirstRetries > 2) return;
+        needRegister = true;
+      } else if (opts.once) return;
       await Bun.sleep(opts.retryDelayMs ?? 5000);
       continue;
     }
