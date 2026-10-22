@@ -346,7 +346,8 @@ describe("hub judge records", () => {
 
   test("agent uploads keep checked records and warn about dropped records without overwriting", async () => {
     const { key } = (await (await call("GET", "")).json()) as { key: string };
-    const original = hub.store.judges(key)[0]!;
+    const before = hub.store.judges(key);
+    const original = before[0]!;
     const upload = (records: unknown[]) =>
       fetch(
         hub.url + runPath.replace("/api/runs/", "/api/agent/runs/") + "/judges",
@@ -368,7 +369,7 @@ describe("hub judge records", () => {
       warn: "dropped 1 judge record(s) that joined no human label: zero_joined",
     });
     expect((await judges()).some((j) => j.check === zero.check)).toBe(false);
-    expect(hub.store.judges(key)).toEqual([original]);
+    expect(hub.store.judges(key)).toEqual(before);
 
     const dropped = await upload([
       { ...original, joined: 0 },
@@ -386,7 +387,7 @@ describe("hub judge records", () => {
       ],
       warn: `dropped 4 judge record(s) that joined no human label: ${original.check}, string_joined, missing_joined, negative_joined`,
     });
-    expect(hub.store.judges(key)).toEqual([original]);
+    expect(hub.store.judges(key)).toEqual(before);
     const kept = await upload([original, { check: "bad_shape" }]);
     expect(await kept.json()).toEqual({ stored: 1 });
   });

@@ -124,14 +124,17 @@ describe("mcp", () => {
     hub.store.putJudges(key, [
       { ...checked[0]!, check: "legacy_zero", joined: 0 },
     ]);
-    const judges = await call("get_judges", {
-      run: "exchange-triage/2026-10-19-prompts",
-    });
-    expect(judges.data.map((j: { check: string }) => j.check).sort()).toEqual([
-      "attribution_claude",
-      "attribution_jev",
-    ]);
-    expect(judges.data).toEqual(checked);
+    try {
+      const judges = await call("get_judges", {
+        run: "exchange-triage/2026-10-19-prompts",
+      });
+      expect(judges.data.map((j: { check: string }) => j.check).sort()).toEqual(
+        ["attribution_claude", "attribution_jev"],
+      );
+      expect(judges.data).toEqual(checked);
+    } finally {
+      hub.store.deleteJudge(key, "legacy_zero");
+    }
     const bad = await (
       await rpc(`/mcp/${T.read}`, {
         jsonrpc: "2.0",
