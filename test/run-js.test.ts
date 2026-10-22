@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HubClient, importRunDir } from "../src/agent/upload.ts";
@@ -19,21 +25,30 @@ describe("run.js against a live hub", () => {
   let hub: ReturnType<typeof startHub>;
   let client: HubClient;
   let n = 0;
+  const temps: string[] = [];
+  const temp = (prefix: string) => {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    temps.push(dir);
+    return dir;
+  };
   beforeAll(() => {
     hub = startHub({
       port: 0,
-      dbPath: join(mkdtempSync(join(tmpdir(), "weigh-runjs-")), "hub.db"),
+      dbPath: join(temp("weigh-runjs-"), "hub.db"),
       tokens: T,
     });
     client = new HubClient(hub.url, T.agent);
   });
-  afterAll(() => hub.stop());
+  afterAll(() => {
+    hub.stop();
+    for (const dir of temps) rmSync(dir, { recursive: true, force: true });
+  });
 
   /** Opens a run page while the run is still claimed, then lets the agent push the whole run through the live stream. */
   async function watchLiveRun(reducedMotion = false) {
     // Run keys are global, so every page gets its own copy of the example under a fresh run id.
     const runId = `live-${++n}`;
-    const dir = mkdtempSync(join(tmpdir(), "weigh-runjs-run-"));
+    const dir = temp("weigh-runjs-run-");
     cpSync(example, dir, { recursive: true });
     for (const file of ["run.json", "traces.jsonl"]) {
       const path = join(dir, file);
@@ -63,12 +78,14 @@ describe("run.js against a live hub", () => {
     const stream = page.es.connect();
     await importRunDir(client, dir, { project: "live" });
     await stream;
-    return page;
+    return { page, runId };
   }
 
   test("completion: the live stream counts every case, closes on the finished status, and the final refresh fills the page", async () => {
-    const page = await watchLiveRun();
-    expect(page.es.url).toBe("/api/runs/exchange-triage/live-1/events?since=0");
+    const { page, runId } = await watchLiveRun();
+    expect(page.es.url).toBe(
+      `/api/runs/exchange-triage/${runId}/events?since=0`,
+    );
     // The finished status closed the stream; the run_start and 108 job_done frames before it drove the count.
     expect(page.es.closed).toBe(true);
     expect(page.progress.textContent).toBe(
@@ -93,7 +110,7 @@ describe("run.js against a live hub", () => {
   });
 
   test("count-up: each counted cell climbs from zero to its value over 600 ms, keeping the real number as its label", async () => {
-    const page = await watchLiveRun();
+    const { page } = await watchLiveRun();
     page.clock = 1000;
     await page.fire();
     const cells = page.cells();
@@ -120,7 +137,7 @@ describe("run.js against a live hub", () => {
   });
 
   test("count-up: reduced motion completes the page without animating a number", async () => {
-    const page = await watchLiveRun(true);
+    const { page } = await watchLiveRun(true);
     await page.fire();
     expect(page.dispatched).toEqual(["weigh:run-finished"]);
     expect(page.frames()).toBe(0);
@@ -157,26 +174,26 @@ describe("run.js against scripted fragments", () => {
     page.es.emit("run_start", { total: 4, resumed: 0 });
     page.es.emit("job_done", { finished: 1, total: 4, line: { case_id: "a" } });
     expect(page.progress.textContent).toBe("Grading case 2 of 4");
+    // The 400 ms refresh runs long before the hub's lease sweep declares the run lost.
+    reply(() => fragments("running", 1, 4));
+    await page.fire();
+    expect(page.pending()).toEqual([]);
 
     page.es.emit("status", { status: "lost" });
     expect(page.status.className).toBe("status lost");
     expect(page.status.lastChild.textContent).toBe("lost");
-    expect(page.es.closed).toBe(false);
-    // The refresh the last job_done queued reads the hub's lost status: the page says so and keeps listening.
-    reply(() => fragments("lost", 1, 4));
-    await page.fire();
     expect(page.progress.textContent).toBe(
       "Lost contact with the agent after 1 of 4 cases.",
     );
-    expect(page.sections.get("verdict")!.innerHTML).toBe("<p>lost</p>");
     expect(page.es.closed).toBe(false);
     expect(page.pending()).toEqual([]);
     expect(page.dispatched).toEqual([]);
 
     // The agent heartbeats again: the hub sends running, then the next case.
     page.es.emit("status", { status: "running" });
-    page.es.emit("job_done", { finished: 2, total: 4, line: { case_id: "b" } });
     expect(page.status.className).toBe("status running");
+    expect(page.progress.textContent).toBe("Grading case 2 of 4");
+    page.es.emit("job_done", { finished: 2, total: 4, line: { case_id: "b" } });
     expect(page.progress.textContent).toBe("Grading case 3 of 4");
 
     page.es.emit("job_done", { finished: 4, total: 4, line: { case_id: "d" } });
@@ -188,7 +205,17 @@ describe("run.js against scripted fragments", () => {
     expect(page.dispatched).toEqual(["weigh:run-finished"]);
   });
 
-  test("fragment retries back off from 3 s to a 30 s cap and give up after eight misses", async () => {
+  test("a resumed run counts its cached cases as finished", () => {
+    const { page } = scripted();
+    // The runner restarts with 3 cases left and 1 already cached; its job_done counts only this attempt.
+    page.es.emit("run_start", { total: 3, resumed: 1 });
+    expect(page.progress.textContent).toBe("Grading case 2 of 4");
+    page.es.emit("job_done", { finished: 1, total: 3, line: { case_id: "b" } });
+    expect(page.progress.textContent).toBe("Grading case 3 of 4");
+    expect(page.bar.style.transform).toBe("scaleX(0.5)");
+  });
+
+  test("fragment retries back off from 3 s to a 30 s cap and give up after nine misses", async () => {
     const { page, calls, reply } = scripted();
     reply(() => Promise.reject(new TypeError("network down")));
     page.es.emit("summary");

@@ -168,7 +168,7 @@ async function refresh() {
     progress();
   } catch {
     // Retry the final fetch too: completion must not depend on another event arriving.
-    // Back off and give up after eight misses so a dead run never polls forever.
+    // Back off and give up after nine misses so a dead run never polls forever.
     retries += 1;
     dirty = retries <= 8;
   } finally {
@@ -219,7 +219,10 @@ if (es) {
   es.addEventListener("status", (e) => {
     const d = JSON.parse(e.data);
     status(d.status);
+    // The hub sends "lost" from its lease sweep, long after the last refresh, and "running" when the
+    // agent heartbeats again, so the progress line redraws here rather than waiting for a refresh.
     if (terminal.has(d.status)) finish();
+    else progress();
   });
   es.addEventListener("end", finish);
   es.onerror = () => {
